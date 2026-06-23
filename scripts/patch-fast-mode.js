@@ -246,7 +246,11 @@ function printSummary({ isCheck, totalCandidates, totalPatched }) {
   } else if (isCheck) {
     console.log("  [ok] no fast_mode auth gates need patching");
   } else if (totalPatched > 0) {
-    console.log(`  [ok] ${totalPatched} auth gate(s) removed`);
+    const candidateSuffix =
+      totalCandidates && totalCandidates !== totalPatched
+        ? ` (out of ${totalCandidates} candidate auth gate(s))`
+        : "";
+    console.log(`  [ok] ${totalPatched} auth gate(s) patched${candidateSuffix}`);
   } else {
     console.log("  [ok] fast_mode auth gates already patched or absent");
   }
