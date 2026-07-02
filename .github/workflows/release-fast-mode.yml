@@ -1,0 +1,164 @@
+name: Fast Mode Draft Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: "Target macOS platform"
+        required: true
+        default: "mac-arm64"
+        type: choice
+        options:
+          - mac-arm64
+          - mac-x64
+          - mac
+      force:
+        description: "Force sync current upstream appcast version"
+        required: true
+        default: true
+        type: boolean
+
+env:
+  NODE_VERSION: "24"
+
+jobs:
+  build:
+    name: Build ${{ matrix.platform }}
+    runs-on: macos-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: ${{ fromJSON(inputs.platform == 'mac' && '["mac-arm64","mac-x64"]' || format('["{0}"]', inputs.platform)) }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: release/fast-mode-apikey
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install tools
+        run: brew install --quiet sevenzip
+
+      - name: Sync upstream macOS app
+        run: |
+          set -euo pipefail
+          if [ "${{ inputs.force }}" = "true" ]; then
+            node scripts/sync-upstream.js --force --skip-win
+          else
+            node scripts/sync-upstream.js --skip-win
+          fi
+
+      - name: Patch ${{ matrix.platform }}
+        run: node scripts/patch-all.js ${{ matrix.platform }}
+
+      - name: Verify Fast mode patch
+        run: |
+          set -euo pipefail
+          CHECK_OUTPUT="$(node scripts/patch-fast-mode.js ${{ matrix.platform }} --check)"
+          printf '%s\n' "$CHECK_OUTPUT"
+          if printf '%s\n' "$CHECK_OUTPUT" | grep -q "would be patched"; then
+            echo "::error::Fast mode auth gates are still patchable after patch-all."
+            exit 1
+          fi
+          if printf '%s\n' "$CHECK_OUTPUT" | grep -q "No chunk contains fast_mode gate logic"; then
+            echo "::error::Fast mode gate chunk was not found after upstream sync."
+            exit 1
+          fi
+
+      - name: Build ${{ matrix.platform }} DMG
+        run: npm run build:${{ matrix.platform }}
+
+      - name: Read upstream version
+        id: version
+        run: |
+          set -euo pipefail
+          VERSION="$(node -p "require('./src/${{ matrix.platform }}/_asar/package.json').version")"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: Codex-Fast-Mode-${{ matrix.platform }}-${{ steps.version.outputs.version }}
+          path: out/Codex-${{ matrix.platform }}-${{ steps.version.outputs.version }}.dmg
+          if-no-files-found: error
+
+  release:
+    name: Create draft release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: release/fast-mode-apikey
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v7
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Resolve release metadata
+        id: meta
+        run: |
+          set -euo pipefail
+          FIRST_DMG="$(find artifacts -name 'Codex-mac-*.dmg' | sort | head -n 1)"
+          if [ -z "$FIRST_DMG" ]; then
+            echo "::error::No DMG artifacts found."
+            exit 1
+          fi
+
+          VERSION="$(basename "$FIRST_DMG" | sed -E 's/^Codex-mac-(arm64|x64)-([0-9.]+)\.dmg$/\2/')"
+          if [ -z "$VERSION" ] || [ "$VERSION" = "$(basename "$FIRST_DMG")" ]; then
+            echo "::error::Unable to parse upstream version from $FIRST_DMG."
+            exit 1
+          fi
+
+          TAG="fast-mode-v${VERSION}"
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "::error::Release tag ${TAG} already exists."
+            exit 1
+          fi
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Create tag
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "${{ steps.meta.outputs.tag }}" -m "Codex Fast Mode ${{ steps.meta.outputs.version }}"
+          git push origin "${{ steps.meta.outputs.tag }}"
+
+      - name: Create draft release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: Codex Fast Mode ${{ steps.meta.outputs.version }}
+          draft: true
+          body: |
+            ## Codex Fast Mode Build
+
+            - Upstream Codex App version: `${{ steps.meta.outputs.version }}`
+            - Platform: `${{ inputs.platform == 'mac' && 'macOS arm64 + macOS x64' || inputs.platform }}`
+            - Includes API key Fast mode support from the `release/fast-mode-apikey` branch.
+            - Auto-updater is disabled by the existing `patch-updater.js` patch.
+            - This is a custom build. Download this DMG instead of using official auto-update, otherwise the Fast mode patch may be overwritten.
+          files: artifacts/*.dmg
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
