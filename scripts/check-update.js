@@ -32,6 +32,11 @@ const APPCAST_ARM64 = "https://persistent.oaistatic.com/codex-app-prod/appcast.x
 const APPCAST_X64 = "https://persistent.oaistatic.com/codex-app-prod/appcast-x64.xml";
 const MS_STORE_PRODUCT_ID = "9plm9xgg6vks";
 const VERSION_FILE = path.join(__dirname, ".versions.json");
+const VERSION_KEY_ALIASES = {
+  "macOS-arm64": ["macOS-arm64", "mac-arm64"],
+  "macOS-x64": ["macOS-x64", "mac-x64"],
+  Windows: ["Windows", "win"],
+};
 
 // ─── HTTP 辅助 ───────────────────────────────────────────────────
 function httpsGet(url) {
@@ -150,6 +155,14 @@ function saveVersions(versions) {
   fs.writeFileSync(VERSION_FILE, JSON.stringify(versions, null, 2) + "\n");
 }
 
+function getSavedVersion(savedVersions, platform) {
+  const keys = VERSION_KEY_ALIASES[platform] || [platform];
+  for (const key of keys) {
+    if (savedVersions[key]) return savedVersions[key];
+  }
+  return undefined;
+}
+
 function formatSize(bytes) {
   if (!bytes) return "Unknown";
   if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
@@ -180,8 +193,10 @@ async function main() {
     if (r.status === "fulfilled") {
       const info = r.value;
       results.push(info);
-      const key = info.platform;
-      const isNew = !saved[key] || saved[key].version !== info.version || saved[key].build !== info.build;
+      const savedInfo = getSavedVersion(saved, info.platform);
+      const savedBuild = String(savedInfo?.build || "");
+      const currentBuild = String(info.build || "");
+      const isNew = !savedInfo || savedInfo.version !== info.version || savedBuild !== currentBuild;
       if (isNew) updates.push(info);
     } else if (!quiet) {
       console.error(`  [!] ${r.reason.message}`);
@@ -206,13 +221,14 @@ async function main() {
     } else {
       for (const info of toShow) {
         const isUpdate = updates.includes(info);
-        const prevVersion = saved[info.platform]?.version || "无记录";
+        const savedInfo = getSavedVersion(saved, info.platform);
+        const prevVersion = savedInfo?.version || "无记录";
         const tag = isUpdate ? "🆕 新版本" : "📌 当前版本";
 
         console.log(`${tag} [${info.platform}]`);
         console.log(`  版本: ${info.version}${info.build ? ` (build ${info.build})` : ""}`);
         if (isUpdate && prevVersion !== "无记录") {
-          console.log(`  旧版: ${prevVersion}${saved[info.platform]?.build ? ` (build ${saved[info.platform].build})` : ""}`);
+          console.log(`  旧版: ${prevVersion}${savedInfo?.build ? ` (build ${savedInfo.build})` : ""}`);
         }
         if (info.pubDate) console.log(`  发布: ${info.pubDate}`);
         console.log(`  大小: ${formatSize(info.size)}`);

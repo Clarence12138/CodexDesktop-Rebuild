@@ -34,8 +34,13 @@ jobs:
       - name: Check upstream versions
         id: detect
         run: |
+          force_flag=""
+          if [ "${{ inputs.force }}" = "true" ]; then
+            force_flag="--force"
+          fi
+
           set +e
-          node scripts/check-update.js --json --force 2>&1
+          node scripts/check-update.js --json $force_flag 2>&1
           exit_code=$?
           set -e
 
@@ -188,7 +193,7 @@ jobs:
   # ──────────────────────────────────────────────
   release:
     needs: [build-mac, build-windows, build-linux]
-    if: always() && needs.check.result == 'success'
+    if: needs.build-mac.result == 'success' && needs.build-windows.result == 'success' && needs.build-linux.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -222,6 +227,21 @@ jobs:
 
           if [ -z "$VERSION" ]; then echo "No version detected"; exit 0; fi
 
+          RESULT_JSON="$RESULT" node <<'NODE'
+          const fs = require('fs');
+          const data = JSON.parse(process.env.RESULT_JSON);
+          const checkedAt = new Date().toISOString();
+          const versions = {};
+          for (const [platform, info] of Object.entries(data.platforms || {})) {
+            versions[platform] = {
+              version: info.version,
+              build: info.build || '',
+              checkedAt,
+            };
+          }
+          fs.writeFileSync('scripts/.versions.json', JSON.stringify(versions, null, 2) + '\n');
+          NODE
+
           node -e "
             const fs=require('fs'), p=JSON.parse(fs.readFileSync('package.json','utf8'));
             p.version='$VERSION';
@@ -231,7 +251,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          git add package.json
+          git add package.json scripts/.versions.json
           git diff --cached --quiet && echo "No version change" && exit 0
 
           git commit -m "Bump version to ${VERSION}"
