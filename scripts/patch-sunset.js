@@ -15,7 +15,7 @@
 const fs = require("fs");
 const path = require("path");
 const { parse } = require("acorn");
-const { locateBundles, relPath } = require("./patch-util");
+const { relPath, SRC_DIR } = require("./patch-util");
 
 // ──────────────────────────────────────────────
 //  AST walker
@@ -57,45 +57,83 @@ function getLiteralValue(node) {
   return null;
 }
 
-function collectPatches(ast, source) {
-  const allPatches = [];
+function isFunction(node) {
+  return [
+    "FunctionDeclaration",
+    "FunctionExpression",
+    "ArrowFunctionExpression",
+  ].includes(node.type);
+}
 
-  walk(ast, (node) => {
-    if (
-      node.type !== "FunctionDeclaration" &&
-      node.type !== "FunctionExpression" &&
-      node.type !== "ArrowFunctionExpression"
-    )
-      return;
+function collectNumericGateCalls(node, source, patches) {
+  walk(node, (child) => {
+    if (child.type !== "CallExpression") return;
+    if (child.callee?.type !== "Identifier") return;
+    if (child.arguments?.length !== 1) return;
 
-    const funcSrc = source.slice(node.start, node.end);
-    // Structural match: function must contain a sunset-related i18n key
-    if (!SUNSET_MARKERS.some((m) => funcSrc.includes(m))) return;
-
-    // Within this function, find gate calls: identifier(`numericString`)
-    walk(node, (child) => {
-      if (child.type !== "CallExpression") return;
-      if (child.callee?.type !== "Identifier") return;
-      if (child.arguments?.length !== 1) return;
-
-      const argVal = getLiteralValue(child.arguments[0]);
-      if (!argVal || !/^\d{6,}$/.test(argVal)) return;
-
-      const callSrc = source.slice(child.start, child.end);
-      if (callSrc === "!1") return;
-
-      if (!allPatches.some((x) => x.start === child.start)) {
-        allPatches.push({
-          start: child.start,
-          end: child.end,
-          replacement: "!1",
-          original: callSrc,
-        });
-      }
+    const argVal = getLiteralValue(child.arguments[0]);
+    if (!argVal || !/^\d{6,}$/.test(argVal)) return;
+    if (patches.some((item) => item.start === child.start)) return;
+    patches.push({
+      start: child.start,
+      end: child.end,
+      replacement: "!1/* app_sunset_gate */",
+      original: source.slice(child.start, child.end),
     });
   });
+}
 
-  return allPatches;
+function collectPatches(ast, source) {
+  const allPatches = [];
+  const rendererNames = new Set();
+  let verified = source.includes("app_sunset_gate") ? 1 : 0;
+
+  walk(ast, (node) => {
+    if (!isFunction(node)) return;
+
+    const funcSrc = source.slice(node.start, node.end);
+    if (!SUNSET_MARKERS.some((m) => funcSrc.includes(m))) return;
+    if (node.type === "FunctionDeclaration" && node.id?.name) {
+      rendererNames.add(node.id.name);
+    }
+    collectNumericGateCalls(node, source, allPatches);
+  });
+
+  // 26.707 split the gate and UI renderer into adjacent functions. Locate a
+  // function that references the sunset renderer, then disable its numeric
+  // Statsig gate.
+  if (rendererNames.size > 0) {
+    walk(ast, (node) => {
+      if (!isFunction(node)) return;
+      const funcSrc = source.slice(node.start, node.end);
+      if (![...rendererNames].some((name) => funcSrc.includes(name))) return;
+      collectNumericGateCalls(node, source, allPatches);
+    });
+  }
+
+  return { patches: allPatches, verified };
+}
+
+function locateTargets(platform) {
+  const platforms = platform
+    ? [platform]
+    : ["mac-arm64", "mac-x64", "win"].filter((name) =>
+        fs.existsSync(path.join(SRC_DIR, name, "_asar", "webview", "assets")),
+      );
+  const targets = [];
+  for (const name of platforms) {
+    const assetsDir = path.join(SRC_DIR, name, "_asar", "webview", "assets");
+    if (!fs.existsSync(assetsDir)) continue;
+    for (const file of fs.readdirSync(assetsDir)) {
+      if (!file.endsWith(".js")) continue;
+      const filePath = path.join(assetsDir, file);
+      const source = fs.readFileSync(filePath, "utf8");
+      if (source.includes("appSunset.title") && source.includes("defaultMessage")) {
+        targets.push({ platform: name, path: filePath });
+      }
+    }
+  }
+  return targets;
 }
 
 // ──────────────────────────────────────────────
@@ -107,17 +145,14 @@ function main() {
   const isCheck = args.includes("--check");
   const platform = args.find((a) => ["mac-arm64", "mac-x64", "win"].includes(a));
 
-  const bundles = locateBundles({
-    dir: "assets",
-    pattern: /^index-.*\.js$/,
-    platform,
-  });
+  const bundles = locateTargets(platform);
 
   if (bundles.length === 0) {
-    console.error("[x] No index bundle found");
+    console.error("[x] No bundle containing the app sunset UI found");
     process.exit(1);
   }
 
+  let succeeded = 0;
   for (const bundle of bundles) {
     console.log(`\n-- [${bundle.platform}] ${relPath(bundle.path)}`);
     const source = fs.readFileSync(bundle.path, "utf-8");
@@ -127,13 +162,15 @@ function main() {
     const ast = parse(source, { ecmaVersion: "latest", sourceType: "module" });
     console.log(`   parse: ${Date.now() - t0}ms`);
 
-    const patches = collectPatches(ast, source);
+    const { patches, verified } = collectPatches(ast, source);
 
     if (patches.length === 0) {
-      if (!SUNSET_MARKERS.some((m) => source.includes(m))) {
-        console.log("   [!] No sunset markers found in bundle");
+      if (verified > 0) {
+        console.log(`   [ok] Sunset gate already disabled (${verified} verified)`);
+        succeeded++;
       } else {
-        console.log("   [ok] Sunset gate already disabled or no gate call found");
+        console.error("   [x] Sunset UI found, but its gate was not located");
+        process.exitCode = 1;
       }
       continue;
     }
@@ -143,6 +180,7 @@ function main() {
       for (const p of patches) {
         console.log(`     > offset ${p.start}: ${p.original} -> ${p.replacement}`);
       }
+      succeeded++;
       continue;
     }
 
@@ -156,7 +194,12 @@ function main() {
 
     fs.writeFileSync(bundle.path, code, "utf-8");
     console.log(`   [ok] Sunset gate disabled: ${patches.length} gate calls -> !1`);
+    succeeded++;
   }
+
+  if (succeeded !== bundles.length) process.exitCode = 1;
 }
 
-main();
+if (require.main === module) main();
+
+module.exports = { collectPatches };

@@ -107,8 +107,16 @@ function main() {
 
     const patches = [];
     const seen = new Set();
+    let verified = 0;
 
     walkAST(ast, (node, parent) => {
+      if (node.type === "Property") {
+        const key = getPropertyName(node.key);
+        const value = source.slice(node.value.start, node.value.end);
+        if (["allowInspectElement", "devTools"].includes(key) && value === "!0") {
+          verified++;
+        }
+      }
       for (const rule of RULES) {
         const result = rule.match(node, source, parent);
         if (!result) continue;
@@ -120,7 +128,12 @@ function main() {
     });
 
     if (patches.length === 0) {
-      console.log("   [ok] DevTools already enabled or no match");
+      if (verified > 0) {
+        console.log(`   [ok] DevTools already enabled (${verified} verified)`);
+      } else {
+        console.error("   [x] DevTools properties were not located");
+        process.exitCode = 1;
+      }
       continue;
     }
 

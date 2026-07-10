@@ -38,6 +38,7 @@ function walk(node, visitor) {
 
 function collectPatches(ast, source) {
   const patches = [];
+  let verified = 0;
 
   walk(ast, (node) => {
     // Match: Property with key being an updater method name and value being a FunctionExpression
@@ -54,7 +55,10 @@ function collectPatches(ast, source) {
     if (ret.type !== "ReturnStatement" || !ret.argument) return;
 
     const retSrc = source.slice(ret.argument.start, ret.argument.end);
-    if (retSrc === "!1") return;
+    if (retSrc === "!1") {
+      verified++;
+      return;
+    }
 
     patches.push({
       id: keyName,
@@ -65,7 +69,7 @@ function collectPatches(ast, source) {
     });
   });
 
-  return patches;
+  return { patches, verified };
 }
 
 function locateTargets(platform) {
@@ -96,22 +100,38 @@ function locateTargets(platform) {
 
 function main() {
   const args = process.argv.slice(2);
+  const isCheck = args.includes("--check");
   const platform = args.find((a) => ["mac-arm64", "mac-x64", "win"].includes(a));
 
   const targets = locateTargets(platform);
   if (targets.length === 0) {
-    console.log("  [ok] No updater targets found");
-    return;
+    console.error("[x] No updater targets found");
+    process.exit(1);
   }
 
+  let totalPatched = 0;
+  let totalVerified = 0;
   for (const bundle of targets) {
     console.log(`  [${bundle.platform}] ${relPath(bundle.path)}`);
     const source = fs.readFileSync(bundle.path, "utf-8");
     const ast = parse(source, { ecmaVersion: "latest", sourceType: "module" });
-    const patches = collectPatches(ast, source);
+    const { patches, verified } = collectPatches(ast, source);
+    totalVerified += verified;
 
     if (patches.length === 0) {
-      console.log("    [ok] Already patched or no match");
+      if (verified > 0) {
+        console.log(`    [ok] ${verified} updater methods already disabled`);
+      } else {
+        console.log("    [-] Contains updater references but no method definitions");
+      }
+      continue;
+    }
+
+    if (isCheck) {
+      for (const p of patches) {
+        console.log(`    [?] [${p.id}] ${p.original} -> !1`);
+      }
+      totalPatched += patches.length;
       continue;
     }
 
@@ -123,8 +143,13 @@ function main() {
     }
 
     fs.writeFileSync(bundle.path, code, "utf-8");
+    totalPatched += patches.length;
     console.log(`    [ok] ${patches.length} updater methods disabled`);
   }
+
+  if (totalPatched === 0 && totalVerified === 0) process.exitCode = 1;
 }
 
-main();
+if (require.main === module) main();
+
+module.exports = { collectPatches };

@@ -13,8 +13,31 @@ Cross-platform Electron build for OpenAI Codex Desktop App.
 ## Build
 
 ```bash
-# Install dependencies
-npm install
+# Install locked dependencies
+npm ci
+
+# Rebuild the installed arm64 app (sync + patch + verify + package)
+npm run rebuild:mac-arm64 -- --local-mac-app /Applications/Codex.app
+
+# Or download both macOS architectures from the official appcasts
+npm run rebuild:mac
+
+# Validate patch compatibility without changing extracted sources
+node scripts/patch-all.js mac-arm64 --check
+```
+
+The generated macOS image is written to `out/Codex-<platform>-<version>.dmg`.
+The rebuild exits on upstream download, extraction, patch, CLI replacement,
+ASAR integrity, code-signing, or image verification failures.
+
+### Individual stages
+
+```bash
+# Download/extract upstream sources (or pass --local-mac-app)
+npm run sync -- --skip-win
+
+# Apply patches
+npm run patch:mac
 
 # Build for current platform
 npm run build
@@ -62,7 +85,7 @@ GitHub Actions automatically builds on:
 **© OpenAI · Cometix Space**
 
 - [OpenAI Codex](https://github.com/openai/codex) - Original Codex CLI (Apache-2.0)
-- [Cometix Space](https://github.com/Haleclipse) - Cross-platform rebuild & [@cometix/codex](https://www.npmjs.com/package/@cometix/codex) binaries
+- [Cometix Space](https://github.com/Haleclipse) - Cross-platform rebuild & Linux [@cometix/codex](https://www.npmjs.com/package/@cometix/codex) binaries
 - [Electron Forge](https://www.electronforge.io/) - Build toolchain
 
 ## License

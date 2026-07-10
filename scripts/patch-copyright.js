@@ -84,6 +84,22 @@ function collectPatches(ast, source) {
       return;
     }
   });
+
+  // Current builds render a custom About dialog from an HTML template instead
+  // of using setAboutPanelOptions(). Match the complete element to avoid
+  // changing unrelated copyright strings embedded in syntax grammars.
+  const oldHtml = `<div class="copyright">${OLD_COPYRIGHT}</div>`;
+  const newHtml = `<div class="copyright">${NEW_COPYRIGHT}</div>`;
+  let offset = source.indexOf(oldHtml);
+  while (offset !== -1) {
+    patches.push({
+      start: offset,
+      end: offset + oldHtml.length,
+      replacement: newHtml,
+      original: oldHtml,
+    });
+    offset = source.indexOf(oldHtml, offset + oldHtml.length);
+  }
   return patches;
 }
 
@@ -107,6 +123,7 @@ function main() {
     process.exit(1);
   }
 
+  let succeeded = 0;
   for (const bundle of bundles) {
     console.log(`\n-- [${bundle.platform}] ${relPath(bundle.path)}`);
     const source = fs.readFileSync(bundle.path, "utf-8");
@@ -122,8 +139,10 @@ function main() {
       // Check if already patched
       if (source.includes(NEW_COPYRIGHT)) {
         console.log("   [ok] Already patched");
+        succeeded++;
       } else {
-        console.log("   [!] No copyright property matched");
+        console.error("   [x] About copyright target not found");
+        process.exitCode = 1;
       }
       continue;
     }
@@ -133,6 +152,7 @@ function main() {
       for (const p of patches) {
         console.log(`     > offset ${p.start}: ${p.original} -> ${p.replacement}`);
       }
+      succeeded++;
       continue;
     }
 
@@ -145,7 +165,12 @@ function main() {
 
     fs.writeFileSync(bundle.path, code, "utf-8");
     console.log(`   [ok] Copyright updated: ${patches.length} replacements`);
+    succeeded++;
   }
+
+  if (succeeded !== bundles.length) process.exitCode = 1;
 }
 
-main();
+if (require.main === module) main();
+
+module.exports = { collectPatches };

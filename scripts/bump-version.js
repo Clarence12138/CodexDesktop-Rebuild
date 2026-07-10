@@ -12,30 +12,75 @@
  * Usage:
  *   node scripts/bump-version.js           # Update package.json and print version
  *   node scripts/bump-version.js --dry-run # Print version without modifying
+ *   node scripts/bump-version.js --platform mac-x64
  */
 const fs = require("fs");
 const path = require("path");
 
 const ROOT_PKG = path.join(__dirname, "..", "package.json");
+const ROOT_LOCK = path.join(__dirname, "..", "package-lock.json");
 const SRC_DIR = path.join(__dirname, "..", "src");
+const PLATFORM_PRIORITY = Object.freeze([
+  "mac-arm64",
+  "mac-x64",
+  "win",
+  "linux-x64",
+  "linux-arm64",
+]);
 
-function findUpstreamPkg() {
-  for (const plat of ["unix", "win"]) {
-    const p = path.join(SRC_DIR, plat, "package.json");
-    if (fs.existsSync(p)) return p;
+function parseArgs(argv) {
+  const platformIndex = argv.indexOf("--platform");
+  if (platformIndex !== -1 && !argv[platformIndex + 1]) {
+    throw new Error("--platform requires a value");
   }
-  // Legacy fallback
-  const legacy = path.join(SRC_DIR, "package.json");
-  if (fs.existsSync(legacy)) return legacy;
+
+  return {
+    dryRun: argv.includes("--dry-run"),
+    platform: platformIndex === -1 ? null : argv[platformIndex + 1],
+  };
+}
+
+function findUpstreamPkg({ srcDir = SRC_DIR, platform = null } = {}) {
+  const platforms = platform ? [platform] : PLATFORM_PRIORITY;
+  for (const candidate of platforms) {
+    const packagePath = path.join(srcDir, candidate, "_asar", "package.json");
+    if (fs.existsSync(packagePath)) return packagePath;
+  }
   return null;
 }
 
-function main() {
-  const dryRun = process.argv.includes("--dry-run");
+function updateVersionFiles({
+  packagePath = ROOT_PKG,
+  lockPath = ROOT_LOCK,
+  version,
+  buildNumber = "",
+}) {
+  const rootPkg = JSON.parse(fs.readFileSync(packagePath, "utf-8"));
+  const lock = JSON.parse(fs.readFileSync(lockPath, "utf-8"));
+  if (!lock.packages || !lock.packages[""]) {
+    throw new Error("package-lock.json is missing packages['']");
+  }
 
-  const upstreamPath = findUpstreamPkg();
+  const oldVersion = rootPkg.version;
+  rootPkg.version = version;
+  if (buildNumber) rootPkg.codexBuildNumber = buildNumber;
+  lock.version = version;
+  lock.packages[""].version = version;
+
+  fs.writeFileSync(packagePath, `${JSON.stringify(rootPkg, null, 2)}\n`);
+  fs.writeFileSync(lockPath, `${JSON.stringify(lock, null, 2)}\n`);
+  return oldVersion;
+}
+
+function main() {
+  const { dryRun, platform } = parseArgs(process.argv.slice(2));
+
+  const upstreamPath = findUpstreamPkg({ platform });
   if (!upstreamPath) {
-    console.error("[x] No upstream package.json found in src/{unix,win}/");
+    const expected = platform
+      ? `src/${platform}/_asar/package.json`
+      : "src/<platform>/_asar/package.json";
+    console.error(`[x] No upstream package.json found at ${expected}`);
     process.exit(1);
   }
 
@@ -58,21 +103,27 @@ function main() {
     return;
   }
 
-  const rootPkg = JSON.parse(fs.readFileSync(ROOT_PKG, "utf-8"));
-  const oldVersion = rootPkg.version;
-
-  rootPkg.version = version;
-  if (buildNumber) {
-    rootPkg.codexBuildNumber = buildNumber;
-  }
-
-  fs.writeFileSync(ROOT_PKG, JSON.stringify(rootPkg, null, 2) + "\n");
+  const oldVersion = updateVersionFiles({ version, buildNumber });
 
   console.log(`   ${oldVersion} -> ${version}`);
-  console.log("   [ok] package.json updated");
+  console.log("   [ok] package.json and package-lock.json updated");
 
   // Print version to stdout (last line) for CI
   process.stdout.write(version);
 }
 
-main();
+if (require.main === module) {
+  try {
+    main();
+  } catch (error) {
+    console.error(`[x] ${error.message}`);
+    process.exit(1);
+  }
+}
+
+module.exports = {
+  PLATFORM_PRIORITY,
+  findUpstreamPkg,
+  parseArgs,
+  updateVersionFiles,
+};

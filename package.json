@@ -1,7 +1,7 @@
 {
   "name": "codex-rebuild",
   "productName": "Codex",
-  "version": "26.623.101652",
+  "version": "26.707.31428",
   "description": "Codex Electron App - Cross-platform Build",
   "main": "src/.vite/build/bootstrap.js",
   "scripts": {
@@ -22,10 +22,14 @@
     "build:linux-arm64": "node scripts/prepare-src.js --platform linux-arm64 && npm run rebuild:native && node scripts/sync-native-modules.js --platform linux-arm64 && rm -rf out && electron-forge make --platform=linux --arch=arm64",
     "build:linux": "npm run build:linux-x64 && npm run build:linux-arm64",
     "build:all": "npm run build:mac && npm run build:win && npm run build:linux",
+    "rebuild:mac-arm64": "node scripts/rebuild.js --platform mac-arm64",
+    "rebuild:mac-x64": "node scripts/rebuild.js --platform mac-x64",
+    "rebuild:mac": "node scripts/rebuild.js --platform mac",
     "sync": "node scripts/sync-upstream.js",
     "check-update": "node scripts/check-update.js",
     "bump-version": "node scripts/bump-version.js",
-    "rebuild:native": "electron-rebuild"
+    "rebuild:native": "electron-rebuild",
+    "test": "node --test tests/*.test.js scripts/*.test.js"
   },
   "devDependencies": {
     "@electron-forge/cli": "^7.10.2",
@@ -62,7 +66,7 @@
     "zod": "^4.1.13"
   },
   "codexBuildFlavor": "prod",
-  "codexBuildNumber": "1272",
+  "codexBuildNumber": "5059",
   "codexSparkleFeedUrl": "https://persistent.oaistatic.com/codex-app-prod/appcast.xml",
   "codexSparklePublicKey": "rhcBvttuqDFriyNqwTQJR3L4UT1WjIK4QxtwtwusVic="
 }

@@ -102,7 +102,7 @@ function collectPatches(ast, source) {
     patches.push({
       start: replaceNode.start,
       end: replaceNode.end,
-      replacement: "!0",
+      replacement: "!0/* enable_i18n */",
       original: exprSrc,
     });
   });
@@ -160,8 +160,8 @@ function main() {
   const targets = locateTargets(platform);
 
   if (targets.length === 0) {
-    console.log("[ok] No files contain enable_i18n (upstream may have removed gate)");
-    return;
+    console.error("[x] No files contain the enable_i18n gate or patch marker");
+    process.exit(1);
   }
 
   let grandTotal = 0;
@@ -179,7 +179,12 @@ function main() {
     grandTotal += patches.length;
 
     if (patches.length === 0) {
-      console.log("   [ok] enable_i18n already bypassed or no AST match");
+      if (source.includes("/* enable_i18n */")) {
+        console.log("   [ok] enable_i18n already bypassed");
+      } else {
+        console.error("   [x] enable_i18n marker found, but gate was not located");
+        process.exitCode = 1;
+      }
       continue;
     }
 

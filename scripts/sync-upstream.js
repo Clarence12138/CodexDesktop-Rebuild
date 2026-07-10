@@ -1,330 +1,295 @@
 #!/usr/bin/env node
 /**
- * sync-upstream.js — Extract full upstream Codex resources
- *
- * Output structure per platform:
- *   src/{platform}/
- *     _asar/              Extracted app.asar content (patch target)
- *     app.asar.unpacked/  Native modules (kept as-is from upstream)
- *     codex|codex.exe     CLI binary (will be replaced by @cometix/codex)
- *     rg|rg.exe           ripgrep binary (kept from upstream)
- *     plugins/            Bundled plugins
- *     native/             Platform native modules
- *     ...                 All other upstream resources
+ * Synchronize complete upstream resources into src/<platform>.
  *
  * Usage:
- *   node scripts/sync-upstream.js [--force] [--skip-mac] [--skip-win]
+ *   node scripts/sync-upstream.js [--force] [--check-only]
+ *     [--skip-mac] [--skip-win] [--mac-platform mac-arm64|mac-x64]
+ *     [--local-mac-app /path/to/App.app]
  */
 
-const https = require("https");
-const tls = require("tls");
-const http = require("http");
 const fs = require("fs");
+const http = require("http");
+const https = require("https");
+const os = require("os");
 const path = require("path");
-const { execSync } = require("child_process");
-
-// TLS certs for MS delivery CDN
-const certsDir = path.join(__dirname, "certs");
-const extraCAs = [...tls.rootCertificates];
-for (const f of ["ms-root-ca.pem", "ms-update-ca.pem"]) {
-  const p = path.join(certsDir, f);
-  if (fs.existsSync(p)) extraCAs.push(fs.readFileSync(p, "utf-8"));
-}
-https.globalAgent.options.ca = extraCAs;
+const tls = require("tls");
+const { execFileSync } = require("child_process");
+const asar = require("@electron/asar");
+const {
+  clearDir,
+  findFile,
+  inspectMacApp,
+  parseArgs,
+  removeCacheEntries,
+} = require("./sync-upstream-lib");
 
 const PROJECT_ROOT = path.resolve(__dirname, "..");
 const SRC_DIR = path.join(PROJECT_ROOT, "src");
-const TEMP_DIR = path.join(require("os").tmpdir(), "codex-sync");
+const TEMP_DIR = path.join(os.tmpdir(), "codex-sync");
 const VERSION_FILE = path.join(__dirname, ".versions.json");
+const APPCASTS = Object.freeze({
+  "mac-arm64": "https://persistent.oaistatic.com/codex-app-prod/appcast.xml",
+  "mac-x64": "https://persistent.oaistatic.com/codex-app-prod/appcast-x64.xml",
+});
+const VERSION_KEYS = Object.freeze({
+  "mac-arm64": "macOS-arm64",
+  "mac-x64": "macOS-x64",
+  win: "Windows",
+});
 
-const APPCAST_ARM64 = "https://persistent.oaistatic.com/codex-app-prod/appcast.xml";
-const APPCAST_X64 = "https://persistent.oaistatic.com/codex-app-prod/appcast-x64.xml";
-
-const args = process.argv.slice(2);
-const FORCE = args.includes("--force");
-const CHECK_ONLY = args.includes("--check-only");
-const SKIP_MAC = args.includes("--skip-mac");
-const SKIP_WIN = args.includes("--skip-win");
-
-// ─── Helpers ────────────────────────────────────────────────────
+function configureTls() {
+  const certsDir = path.join(__dirname, "certs");
+  const extraCAs = [...tls.rootCertificates];
+  for (const filename of ["ms-root-ca.pem", "ms-update-ca.pem"]) {
+    const certPath = path.join(certsDir, filename);
+    if (fs.existsSync(certPath)) extraCAs.push(fs.readFileSync(certPath, "utf8"));
+  }
+  https.globalAgent.options.ca = extraCAs;
+}
 
 function httpGet(url) {
-  const mod = url.startsWith("https") ? https : http;
+  const transport = url.startsWith("https:") ? https : http;
   return new Promise((resolve, reject) => {
-    mod.get(url, (res) => {
-      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location)
-        return httpGet(res.headers.location).then(resolve, reject);
+    transport.get(url, (response) => {
+      if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
+        response.resume();
+        const redirected = new URL(response.headers.location, url).toString();
+        return httpGet(redirected).then(resolve, reject);
+      }
       const chunks = [];
-      res.on("data", (c) => chunks.push(c));
-      res.on("end", () => resolve({ status: res.statusCode, body: Buffer.concat(chunks) }));
+      response.on("data", (chunk) => chunks.push(chunk));
+      response.on("end", () => resolve({ status: response.statusCode, body: Buffer.concat(chunks) }));
     }).on("error", reject);
   });
 }
 
-function curlDownload(url, dest, label) {
-  console.log(`  [dl] ${label}`);
-  execSync(`curl -L --retry 3 --retry-delay 2 -o "${dest}" "${url}"`, { stdio: "inherit" });
+function download(url, destination, label) {
+  if (!url) throw new Error(`${label}: download URL is missing`);
+  const partial = `${destination}.part`;
+  fs.rmSync(partial, { force: true });
+  console.log(`   [download] ${label}`);
+  try {
+    execFileSync("curl", ["-fL", "--retry", "3", "--retry-delay", "2", "-o", partial, url], {
+      stdio: "inherit",
+    });
+    fs.renameSync(partial, destination);
+  } catch (error) {
+    fs.rmSync(partial, { force: true });
+    throw error;
+  }
 }
 
-function extractArchive(archive, dest) {
+function extractArchive(archive, destination) {
+  clearDir(destination);
   if (process.platform === "darwin" && archive.endsWith(".zip")) {
-    // ditto preserves macOS symlinks + resource forks (required for .app)
-    execSync(`ditto -xk "${archive}" "${dest}"`);
-  } else {
-    // 7zz for Windows MSIX and Linux (symlinks don't matter — only ASAR content used)
-    for (const bin of ["7zz", "7z"]) {
-      try {
-        execSync(`${bin} x -y -o"${dest}" "${archive}"`, { stdio: "pipe" });
-        return;
-      } catch {
-        if (fs.readdirSync(dest).length > 0) return;
-      }
+    execFileSync("ditto", ["-xk", archive, destination], { stdio: "inherit" });
+    return;
+  }
+  for (const binary of ["7zz", "7z"]) {
+    try {
+      execFileSync(binary, ["x", "-y", `-o${destination}`, archive], { stdio: "pipe" });
+      return;
+    } catch (error) {
+      if (error.code === "ENOENT") continue;
+      throw new Error(`Failed to extract ${archive} with ${binary}: ${error.message}`);
     }
-    throw new Error(`Failed to extract ${archive}`);
   }
+  throw new Error("Neither 7zz nor 7z is installed");
 }
-
-function findFile(dir, name) {
-  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
-    const full = path.join(dir, e.name);
-    if (e.isFile() && e.name === name) return full;
-    if (e.isDirectory()) { const r = findFile(full, name); if (r) return r; }
-  }
-  return null;
-}
-
-function copyRecursive(src, dest) {
-  fs.mkdirSync(dest, { recursive: true });
-  let count = 0;
-  for (const e of fs.readdirSync(src, { withFileTypes: true })) {
-    const s = path.join(src, e.name), d = path.join(dest, e.name);
-    if (e.isDirectory()) { count += copyRecursive(s, d); }
-    else if (e.isSymbolicLink()) { /* skip */ }
-    else { fs.copyFileSync(s, d); count++; }
-  }
-  return count;
-}
-
-function clearDir(dir) {
-  if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true });
-  fs.mkdirSync(dir, { recursive: true });
-}
-
-function countFiles(dir) {
-  let n = 0;
-  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
-    if (e.isDirectory()) n += countFiles(path.join(dir, e.name));
-    else n++;
-  }
-  return n;
-}
-
-// ─── Version detection ──────────────────────────────────────────
 
 async function getAppcastVersion(url) {
   const { XMLParser } = require("fast-xml-parser");
-  const res = await httpGet(url);
-  if (res.status !== 200) throw new Error(`Appcast fetch failed: ${res.status}`);
+  const response = await httpGet(url);
+  if (response.status !== 200) throw new Error(`Appcast fetch failed: HTTP ${response.status}`);
   const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: "@_", removeNSPrefix: true });
-  const parsed = parser.parse(res.body.toString());
-  const items = parsed.rss?.channel?.item;
-  const latest = Array.isArray(items) ? items[0] : items;
-  let enc = latest.enclosure;
-  if (Array.isArray(enc)) enc = enc[0];
-  return {
-    version: latest.shortVersionString || latest.title,
-    build: String(latest.version || ""),
-    url: enc?.["@_url"] || "",
+  const parsed = parser.parse(response.body.toString("utf8"));
+  const rawItems = parsed.rss?.channel?.item;
+  const latest = Array.isArray(rawItems) ? rawItems[0] : rawItems;
+  const rawEnclosure = latest?.enclosure;
+  const enclosure = Array.isArray(rawEnclosure) ? rawEnclosure[0] : rawEnclosure;
+  const info = {
+    version: latest?.shortVersionString || latest?.title || "",
+    build: String(latest?.version || ""),
+    url: enclosure?.["@_url"] || "",
   };
+  if (!info.version || !info.build || !info.url) throw new Error("Appcast is missing version, build, or URL");
+  return info;
 }
 
 async function getWindowsVersion() {
   const msstore = require("./fetch-msstore");
   const cookie = await msstore.getCookie();
-  const info = await msstore.getAppInfo("9plm9xgg6vks", "US");
-  if (!info.categoryId) throw new Error("No CategoryID");
-  const pkgs = await msstore.getFileList(cookie, info.categoryId, "Retail");
-  if (pkgs.length === 0) throw new Error("No packages");
-  const pkg = pkgs[0];
+  const appInfo = await msstore.getAppInfo("9plm9xgg6vks", "US");
+  if (!appInfo.categoryId) throw new Error("Windows Store response has no CategoryID");
+  const packages = await msstore.getFileList(cookie, appInfo.categoryId, "Retail");
+  if (packages.length === 0) throw new Error("Windows Store returned no packages");
+  const pkg = packages[0];
+  const version = pkg.name.match(/_(\d+\.\d+\.\d+(?:\.\d+)?)_/)?.[1];
+  if (!version) throw new Error(`Cannot determine Windows version from ${pkg.name}`);
   const url = await msstore.getDownloadUrl(pkg.updateID, pkg.revisionNumber, "Retail", pkg.digest);
-  const verMatch = pkg.name.match(/_(\d+\.\d+\.\d+(?:\.\d+)?)_/);
-  return { version: verMatch?.[1] || "unknown", url, packageName: pkg.name };
+  if (!url) throw new Error("Windows Store returned no download URL");
+  return { version, url, packageName: pkg.name };
 }
 
-// ─── Extract macOS ──────────────────────────────────────────────
-
-async function syncMac(variant, appcastUrl, destDir) {
-  const label = `macOS-${variant}`;
-  console.log(`\n-- ${label}`);
-
-  const info = await getAppcastVersion(appcastUrl);
-  console.log(`   version: ${info.version} (build ${info.build})`);
-
-  const zipPath = path.join(TEMP_DIR, `Codex-${variant}-${info.version}.zip`);
-  const extractDir = path.join(TEMP_DIR, `${variant}-extract`);
-
-  if (!fs.existsSync(zipPath)) {
-    curlDownload(info.url, zipPath, label);
-  } else {
-    console.log(`   [cache] ${zipPath}`);
+function copyRecursive(source, destination) {
+  fs.mkdirSync(destination, { recursive: true });
+  let count = 0;
+  for (const entry of fs.readdirSync(source, { withFileTypes: true })) {
+    const sourcePath = path.join(source, entry.name);
+    const destinationPath = path.join(destination, entry.name);
+    if (entry.isDirectory()) count += copyRecursive(sourcePath, destinationPath);
+    else if (!entry.isSymbolicLink()) {
+      fs.copyFileSync(sourcePath, destinationPath);
+      count += 1;
+    }
   }
-
-  console.log("   [unzip]");
-  clearDir(extractDir);
-  extractArchive(zipPath, extractDir);
-
-  const resourcesDir = findResourcesDir(extractDir);
-  if (!resourcesDir) throw new Error(`${label}: Resources directory not found`);
-
-  assembleOutput(resourcesDir, destDir, label);
-  return info;
+  return count;
 }
 
-// ─── Extract Windows ────────────────────────────────────────────
-
-async function syncWin(destDir) {
-  console.log("\n-- Windows");
-
-  const info = await getWindowsVersion();
-  console.log(`   version: ${info.version}`);
-
-  const msixPath = path.join(TEMP_DIR, info.packageName || `codex-win-${info.version}.msix`);
-  const extractDir = path.join(TEMP_DIR, "win-extract");
-
-  if (!fs.existsSync(msixPath)) {
-    curlDownload(info.url, msixPath, "Windows MSIX");
-  } else {
-    console.log(`   [cache] ${msixPath}`);
-  }
-
-  console.log("   [unzip]");
-  clearDir(extractDir);
-  extractArchive(msixPath, extractDir);
-
-  const resourcesDir = path.join(extractDir, "app", "resources");
-  if (!fs.existsSync(resourcesDir)) {
-    const alt = findFile(extractDir, "app.asar");
-    throw new Error(`Windows: resources dir not found${alt ? `, app.asar at ${alt}` : ""}`);
-  }
-
-  assembleOutput(resourcesDir, destDir, "Windows");
-  return info;
+function countFiles(dir) {
+  return fs.readdirSync(dir, { withFileTypes: true }).reduce((total, entry) => {
+    if (entry.isDirectory()) return total + countFiles(path.join(dir, entry.name));
+    return total + 1;
+  }, 0);
 }
 
-// ─── Assemble output ────────────────────────────────────────────
-
-function assembleOutput(resourcesDir, destDir, label) {
+function assembleOutput(resourcesDir, destination, label) {
   const asarPath = path.join(resourcesDir, "app.asar");
   if (!fs.existsSync(asarPath)) throw new Error(`${label}: app.asar not found`);
+  console.log(`   [assemble] -> ${path.relative(PROJECT_ROOT, destination)}/`);
+  clearDir(destination);
+  asar.extractAll(asarPath, path.join(destination, "_asar"));
 
-  console.log(`   [assemble] -> ${path.relative(PROJECT_ROOT, destDir)}/`);
-  clearDir(destDir);
-
-  // 1. Extract app.asar → _asar/ (for patching)
-  const asarDest = path.join(destDir, "_asar");
-  console.log("   [asar extract] -> _asar/");
-  execSync(`npx asar extract "${asarPath}" "${asarDest}"`);
-
-  // 2. Copy app.asar.unpacked/ as-is (native modules)
-  const unpackedSrc = path.join(resourcesDir, "app.asar.unpacked");
-  if (fs.existsSync(unpackedSrc)) {
-    const n = copyRecursive(unpackedSrc, path.join(destDir, "app.asar.unpacked"));
-    console.log(`   [copy] app.asar.unpacked/ (${n} files)`);
+  const unpackedSource = path.join(resourcesDir, "app.asar.unpacked");
+  if (fs.existsSync(unpackedSource)) copyRecursive(unpackedSource, path.join(destination, "app.asar.unpacked"));
+  for (const entry of fs.readdirSync(resourcesDir, { withFileTypes: true })) {
+    if (["app.asar", "app.asar.unpacked"].includes(entry.name) || entry.name.endsWith(".lproj")) continue;
+    const sourcePath = path.join(resourcesDir, entry.name);
+    const destinationPath = path.join(destination, entry.name);
+    if (entry.isDirectory()) copyRecursive(sourcePath, destinationPath);
+    else if (!entry.isSymbolicLink()) fs.copyFileSync(sourcePath, destinationPath);
   }
-
-  // 3. Copy all other resources (binaries, plugins, native, etc.)
-  let extraCount = 0;
-  for (const e of fs.readdirSync(resourcesDir, { withFileTypes: true })) {
-    if (e.name === "app.asar" || e.name === "app.asar.unpacked") continue;
-    if (e.name.endsWith(".lproj")) continue;
-    const s = path.join(resourcesDir, e.name);
-    const d = path.join(destDir, e.name);
-    if (e.isDirectory()) { extraCount += copyRecursive(s, d); }
-    else if (!e.isSymbolicLink()) { fs.copyFileSync(s, d); extraCount++; }
-  }
-  console.log(`   [copy] ${extraCount} extra resource files`);
-
-  const total = countFiles(destDir);
-  console.log(`   [ok] ${total} files total`);
+  console.log(`   [ok] ${countFiles(destination)} files total`);
 }
 
-function findResourcesDir(extractDir) {
-  const appDir = findFile(extractDir, "app.asar");
-  return appDir ? path.dirname(appDir) : null;
+async function syncRemoteMac(variant, info, options) {
+  const shortVariant = variant.replace("mac-", "");
+  const archive = path.join(TEMP_DIR, `Codex-${shortVariant}-${info.version}.zip`);
+  const extractDir = path.join(TEMP_DIR, `${shortVariant}-extract`);
+  removeCacheEntries([archive, extractDir], options.force);
+  if (!fs.existsSync(archive)) download(info.url, archive, variant);
+  else console.log(`   [cache] ${archive}`);
+  extractArchive(archive, extractDir);
+  const metadata = inspectMacApp(extractDir, { variant, version: info.version, build: info.build });
+  assembleOutput(metadata.resourcesDir, path.join(SRC_DIR, variant), variant);
+  return info;
 }
 
-// ─── Version state ──────────────────────────────────────────────
+function cacheLocalMacApp(metadata, options) {
+  for (const variant of metadata.variants) {
+    const shortVariant = variant.replace("mac-", "");
+    const extractDir = path.join(TEMP_DIR, `${shortVariant}-extract`);
+    removeCacheEntries([extractDir], options.force);
+    clearDir(extractDir);
+    execFileSync("ditto", [metadata.appPath, path.join(extractDir, path.basename(metadata.appPath))], {
+      stdio: "inherit",
+    });
+    const cached = inspectMacApp(extractDir, { variant, version: metadata.version, build: metadata.build });
+    assembleOutput(cached.resourcesDir, path.join(SRC_DIR, variant), variant);
+  }
+}
+
+async function syncWindows(info, options) {
+  const archive = path.join(TEMP_DIR, info.packageName);
+  const extractDir = path.join(TEMP_DIR, "win-extract");
+  removeCacheEntries([archive, extractDir], options.force);
+  if (!fs.existsSync(archive)) download(info.url, archive, "Windows MSIX");
+  else console.log(`   [cache] ${archive}`);
+  extractArchive(archive, extractDir);
+  const resourcesDir = path.join(extractDir, "app", "resources");
+  if (!fs.existsSync(resourcesDir)) {
+    const asarPath = findFile(extractDir, "app.asar");
+    throw new Error(`Windows resources directory not found${asarPath ? `; app.asar is at ${asarPath}` : ""}`);
+  }
+  assembleOutput(resourcesDir, path.join(SRC_DIR, "win"), "Windows");
+  return info;
+}
 
 function loadVersions() {
-  try { return JSON.parse(fs.readFileSync(VERSION_FILE, "utf-8")); } catch { return {}; }
+  try {
+    return JSON.parse(fs.readFileSync(VERSION_FILE, "utf8"));
+  } catch (error) {
+    if (error.code === "ENOENT") return {};
+    throw new Error(`Cannot read ${VERSION_FILE}: ${error.message}`);
+  }
 }
-function saveVersions(v) {
-  fs.writeFileSync(VERSION_FILE, JSON.stringify(v, null, 2) + "\n");
-}
 
-// ─── Main ───────────────────────────────────────────────────────
-
-async function main() {
-  console.log("== Codex upstream sync ==\n");
-  fs.mkdirSync(TEMP_DIR, { recursive: true });
-
-  const results = {};
-
-  // Detect versions
-  if (!SKIP_MAC) {
-    try {
-      const arm64Info = await getAppcastVersion(APPCAST_ARM64);
-      console.log(`\n   mac-arm64: ${arm64Info.version} (build ${arm64Info.build})`);
-      results["mac-arm64"] = arm64Info;
-    } catch (e) { console.error(`   [x] mac-arm64 check: ${e.message}`); }
-
-    try {
-      const x64Info = await getAppcastVersion(APPCAST_X64);
-      console.log(`   mac-x64:   ${x64Info.version} (build ${x64Info.build})`);
-      results["mac-x64"] = x64Info;
-    } catch (e) { console.error(`   [x] mac-x64 check: ${e.message}`); }
-  }
-
-  if (!SKIP_WIN) {
-    try {
-      const winInfo = await getWindowsVersion();
-      console.log(`   win:       ${winInfo.version}`);
-      results.win = winInfo;
-    } catch (e) { console.error(`   [x] win check: ${e.message}`); }
-  }
-
-  if (CHECK_ONLY) {
-    console.log("\n== Check only, skipping download ==");
-    return;
-  }
-
-  // Download and extract
-  if (!SKIP_MAC && results["mac-arm64"]) {
-    try {
-      results["mac-arm64"] = await syncMac("arm64", APPCAST_ARM64, path.join(SRC_DIR, "mac-arm64"));
-    } catch (e) { console.error(`   [x] mac-arm64: ${e.message}`); }
-  }
-  if (!SKIP_MAC && results["mac-x64"]) {
-    try {
-      results["mac-x64"] = await syncMac("x64", APPCAST_X64, path.join(SRC_DIR, "mac-x64"));
-    } catch (e) { console.error(`   [x] mac-x64: ${e.message}`); }
-  }
-  if (!SKIP_WIN && results.win) {
-    try {
-      results.win = await syncWin(path.join(SRC_DIR, "win"));
-    } catch (e) { console.error(`   [x] win: ${e.message}`); }
-  }
-
+function saveVersions(results) {
   const saved = loadVersions();
-  for (const [key, info] of Object.entries(results)) {
-    saved[key] = { version: info.version, build: info.build || "", checkedAt: new Date().toISOString() };
+  const checkedAt = new Date().toISOString();
+  for (const [platform, info] of Object.entries(results)) {
+    const versionKey = VERSION_KEYS[platform] || platform;
+    saved[versionKey] = { version: info.version, build: info.build || "", checkedAt };
+    if (versionKey !== platform) delete saved[platform];
   }
-  saveVersions(saved);
-
-  console.log("\n== Done ==");
-  for (const [key, info] of Object.entries(results)) {
-    console.log(`   ${key}: ${info.version}`);
-  }
+  fs.writeFileSync(VERSION_FILE, `${JSON.stringify(saved, null, 2)}\n`);
 }
 
-main().catch((e) => { console.error(`\n[x] ${e.message}`); process.exit(1); });
+async function main(argv = process.argv.slice(2)) {
+  configureTls();
+  const options = parseArgs(argv);
+  console.log("== Codex upstream sync ==");
+  const detected = {};
+  let localMetadata = null;
+
+  if (!options.skipMac && options.localMacApp) {
+    localMetadata = inspectMacApp(options.localMacApp);
+    const variants = options.macPlatform ? [options.macPlatform] : localMetadata.variants;
+    for (const variant of variants) {
+      if (!localMetadata.variants.includes(variant)) {
+        throw new Error(`Local App does not contain ${variant}`);
+      }
+      detected[variant] = { version: localMetadata.version, build: localMetadata.build, local: true };
+    }
+  } else if (!options.skipMac) {
+    for (const [variant, appcast] of Object.entries(APPCASTS)) {
+      if (options.macPlatform && variant !== options.macPlatform) continue;
+      detected[variant] = await getAppcastVersion(appcast);
+    }
+  }
+  if (!options.skipWin) detected.win = await getWindowsVersion();
+
+  for (const [platform, info] of Object.entries(detected)) {
+    console.log(`   ${platform}: ${info.version}${info.build ? ` (build ${info.build})` : ""}`);
+  }
+  if (options.checkOnly) return detected;
+
+  fs.mkdirSync(TEMP_DIR, { recursive: true });
+  const completed = {};
+  if (localMetadata) {
+    const selectedMetadata = {
+      ...localMetadata,
+      variants: Object.keys(detected),
+    };
+    cacheLocalMacApp(selectedMetadata, options);
+    for (const variant of selectedMetadata.variants) completed[variant] = detected[variant];
+  } else {
+    for (const variant of Object.keys(APPCASTS)) {
+      if (detected[variant]) completed[variant] = await syncRemoteMac(variant, detected[variant], options);
+    }
+  }
+  if (detected.win) completed.win = await syncWindows(detected.win, options);
+  saveVersions(completed);
+  console.log("== Done ==");
+  return completed;
+}
+
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(`\n[x] ${error.stack || error.message}`);
+    process.exitCode = 1;
+  });
+}
+
+module.exports = { main };
