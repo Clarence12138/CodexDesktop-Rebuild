@@ -51,8 +51,16 @@ function processTarget(target, options) {
   const ast = parse(source, { ecmaVersion: "latest", sourceType: "module" });
   const result = collectFastModePatches(ast, source);
   for (const id of result.verified) options.satisfied.add(id);
-  for (const patch of result.patches) options.satisfied.add(patch.id);
+  if (!options.isVerify) {
+    for (const patch of result.patches) options.satisfied.add(patch.id);
+  }
   if (result.patches.length === 0) return;
+
+  if (options.isVerify) {
+    throw new Error(
+      `${relPath(target.path)} still has ${result.patches.length} patchable Fast mode capabilities`,
+    );
+  }
 
   console.log(`  [${target.platform}] ${relPath(target.path)}`);
   if (options.isCheck) {
@@ -73,7 +81,11 @@ function main() {
   const targets = findTargets(platforms);
   if (targets.length === 0) throw new Error("No Fast mode targets found");
 
-  const options = { isCheck: args.includes("--check"), satisfied: new Set() };
+  const options = {
+    isCheck: args.includes("--check"),
+    isVerify: args.includes("--verify"),
+    satisfied: new Set(),
+  };
   for (const target of targets) processTarget(target, options);
   const missing = [...REQUIRED_PATCH_IDS].filter((id) => !options.satisfied.has(id));
   if (missing.length > 0) {

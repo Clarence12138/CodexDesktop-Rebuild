@@ -10,13 +10,21 @@ const {
   findVerifiedFeaturePatchIds,
 } = require("./patch-plugin-auth-features");
 const {
+  REQUIRED_RENDERER_PATCH_IDS,
+  REQUIRED_RENDERER_PATCH_PREFIXES,
   findBrowserAvailPatches,
   findGoalGatePatches,
   findPluginAuthPatches,
   findStatsigGatePatches,
+  findVerifiedRendererPatchIds,
 } = require("./patch-plugin-auth-renderer");
 
 const PLATFORMS = Object.freeze(["mac-arm64", "mac-x64", "win"]);
+const FEATURE_CONTEXT_MARKERS = Object.freeze([
+  "browser_use",
+  "computer_use",
+  "browser_use_external",
+]);
 
 function findRendererTargets(platform, assetsDir) {
   const targets = [];
@@ -25,14 +33,14 @@ function findRendererTargets(platform, assetsDir) {
     const filePath = path.join(assetsDir, file);
     const source = fs.readFileSync(filePath, "utf8");
     const rules = [];
+    const hasFeatureContext = FEATURE_CONTEXT_MARKERS.some((marker) =>
+      source.includes(marker),
+    );
     const smallChatGptCandidate =
       source.length < 5000 && source.includes("chatgpt") && source.includes("!==");
 
     if (smallChatGptCandidate) rules.push("auth");
-    if (
-      file.startsWith("use-in-app-browser-use-availability-") ||
-      file.startsWith("use-browser-agent-availability-")
-    ) {
+    if (hasFeatureContext) {
       rules.push("avail", "gate");
     }
     if (file.startsWith("composer-") && source.includes("goalSlashCommand")) {
@@ -113,12 +121,20 @@ function processTarget(target, options) {
   const patches = collectTargetPatches(target, ast, source);
 
   for (const id of findVerifiedFeaturePatchIds(ast, source)) options.satisfied.add(id);
-  for (const patch of patches) {
-    if (REQUIRED_FEATURE_PATCH_IDS.has(patch.id)) options.satisfied.add(patch.id);
+  for (const id of findVerifiedRendererPatchIds(source)) options.satisfied.add(id);
+  if (!options.isVerify) {
+    for (const patch of patches) {
+      options.satisfied.add(patch.id);
+    }
   }
   if (patches.length === 0) {
     console.log("   [-] No applicable gate in this heuristic candidate");
     return;
+  }
+  if (options.isVerify) {
+    throw new Error(
+      `${relPath(target.path)} still has ${patches.length} patchable plugin/browser gates`,
+    );
   }
   if (options.isCheck) {
     for (const patch of patches) {
@@ -146,12 +162,30 @@ function main() {
     seen.add(target.path);
     return true;
   });
-  const options = { isCheck: args.includes("--check"), satisfied: new Set() };
-  for (const target of uniqueTargets) processTarget(target, options);
+  const options = {
+    isCheck: args.includes("--check"),
+    isVerify: args.includes("--verify"),
+    satisfied: new Set(),
+  };
+  try {
+    for (const target of uniqueTargets) processTarget(target, options);
+  } catch (error) {
+    console.error(`[x] ${error.message}`);
+    process.exitCode = 1;
+    return;
+  }
 
   const missing = [...REQUIRED_FEATURE_PATCH_IDS].filter(
     (id) => !options.satisfied.has(id),
   );
+  missing.push(
+    ...[...REQUIRED_RENDERER_PATCH_IDS].filter((id) => !options.satisfied.has(id)),
+  );
+  for (const prefix of REQUIRED_RENDERER_PATCH_PREFIXES) {
+    if (![...options.satisfied].some((id) => id.startsWith(prefix))) {
+      missing.push(`${prefix}*`);
+    }
+  }
   if (missing.length > 0) {
     console.error(`[x] Required plugin/browser capabilities not satisfied: ${missing.join(", ")}`);
     process.exitCode = 1;
@@ -162,5 +196,7 @@ if (require.main === module) main();
 
 module.exports = {
   REQUIRED_FEATURE_PATCH_IDS,
+  REQUIRED_RENDERER_PATCH_IDS,
+  findRendererTargets,
   findVerifiedFeaturePatchIds,
 };

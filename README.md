@@ -24,6 +24,9 @@ npm run rebuild:mac
 
 # Validate patch compatibility without changing extracted sources
 node scripts/patch-all.js mac-arm64 --check
+
+# Strictly verify that every patch is already applied
+node scripts/patch-all.js mac-arm64 --verify
 ```
 
 The generated macOS image is written to `out/Codex-<platform>-<version>.dmg`.

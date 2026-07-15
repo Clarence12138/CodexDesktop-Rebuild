@@ -10,6 +10,7 @@
  * Usage:
  *   node scripts/patch-devtools.js [platform]   # Apply patch (unix/win/omit=both)
  *   node scripts/patch-devtools.js --check      # Dry-run: report matches
+ *   node scripts/patch-devtools.js --verify     # Require both capabilities applied
  */
 const fs = require("fs");
 const path = require("path");
@@ -75,6 +76,7 @@ const RULES = [
     },
   },
 ];
+const REQUIRED_RULE_IDS = new Set(RULES.map((rule) => rule.id));
 
 // ──────────────────────────────────────────────
 //  Main
@@ -83,6 +85,7 @@ const RULES = [
 function main() {
   const args = process.argv.slice(2);
   const isCheck = args.includes("--check");
+  const isVerify = args.includes("--verify");
   const platform = args.find((a) => ["mac-arm64", "mac-x64", "win"].includes(a));
 
   const bundles = locateBundles({
@@ -107,14 +110,14 @@ function main() {
 
     const patches = [];
     const seen = new Set();
-    let verified = 0;
+    const verified = new Set();
 
     walkAST(ast, (node, parent) => {
       if (node.type === "Property") {
         const key = getPropertyName(node.key);
         const value = source.slice(node.value.start, node.value.end);
         if (["allowInspectElement", "devTools"].includes(key) && value === "!0") {
-          verified++;
+          verified.add(key);
         }
       }
       for (const rule of RULES) {
@@ -127,9 +130,22 @@ function main() {
       }
     });
 
+    if (isVerify && patches.length > 0) {
+      console.error(`   [x] ${patches.length} DevTools properties are still patchable`);
+      process.exitCode = 1;
+      continue;
+    }
+
+    const missing = [...REQUIRED_RULE_IDS].filter((id) => !verified.has(id));
+    if (isVerify && missing.length > 0) {
+      console.error(`   [x] DevTools capabilities are not verified: ${missing.join(", ")}`);
+      process.exitCode = 1;
+      continue;
+    }
+
     if (patches.length === 0) {
-      if (verified > 0) {
-        console.log(`   [ok] DevTools already enabled (${verified} verified)`);
+      if (verified.size > 0) {
+        console.log(`   [ok] DevTools already enabled (${verified.size} capabilities verified)`);
       } else {
         console.error("   [x] DevTools properties were not located");
         process.exitCode = 1;

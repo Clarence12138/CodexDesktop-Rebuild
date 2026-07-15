@@ -51,7 +51,7 @@ function rebuild(options) {
 
   for (const platform of platforms) {
     runNode("patch-all.js", [platform]);
-    runNode("patch-all.js", [platform, "--check"]);
+    runNode("patch-all.js", [platform, "--verify"]);
     runNode("build-from-upstream.js", ["--platform", platform]);
   }
   runNode("bump-version.js", ["--platform", platforms[0]]);

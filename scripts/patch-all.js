@@ -7,6 +7,7 @@
  *   node scripts/patch-all.js unix         # Patch unix only
  *   node scripts/patch-all.js win          # Patch win only
  *   node scripts/patch-all.js --check      # Dry-run all
+ *   node scripts/patch-all.js --verify     # Require all patches to be applied
  */
 const { execFileSync } = require("child_process");
 const path = require("path");

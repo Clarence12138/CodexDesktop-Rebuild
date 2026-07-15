@@ -11,6 +11,7 @@ const sunset = require("../scripts/patch-sunset");
 const updater = require("../scripts/patch-updater");
 const archiveDelete = require("../scripts/patch-archive-delete");
 const pluginAuth = require("../scripts/patch-plugin-auth");
+const pluginRenderer = require("../scripts/patch-plugin-auth-renderer");
 
 function parseModule(source) {
   return parse(source, { ecmaVersion: "latest", sourceType: "module" });
@@ -127,6 +128,7 @@ test("updater reports patchable and already-disabled methods", () => {
 
   assert.equal(result.patches.length, 1);
   assert.equal(result.verified, 1);
+  assert.deepEqual(result.verifiedIds, new Set(["shouldIncludeUpdater"]));
 });
 
 test("archive delete validation requires each capability group in one bundle", (t) => {
@@ -178,4 +180,37 @@ test("plugin verification reports each required capability explicitly", () => {
     [...pluginAuth.REQUIRED_FEATURE_PATCH_IDS].filter((id) => !verified.has(id)),
     [],
   );
+});
+
+test("plugin renderer replacements remain explicitly verifiable", () => {
+  const source = [
+    "function availability(){const context=`browser_use`;return{allowed:gate(),available:gate(),isLoading:false}}",
+    "function statsig(){const context=`computer_use`;return check(`1506311413`)}",
+  ].join(";");
+  const ast = parseModule(source);
+  const patches = [
+    ...pluginRenderer.findBrowserAvailPatches(ast, source),
+    ...pluginRenderer.findStatsigGatePatches(ast, source),
+  ];
+  const patched = applyPatches(source, patches);
+  const verified = pluginRenderer.findVerifiedRendererPatchIds(patched);
+
+  assert.deepEqual(
+    [...pluginRenderer.REQUIRED_RENDERER_PATCH_IDS].filter((id) => !verified.has(id)),
+    [],
+  );
+  assert.ok([...verified].some((id) => id.startsWith("statsig_gate_")));
+});
+
+test("plugin renderer target discovery scans feature context regardless of chunk size", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "plugin-renderer-target-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const file = path.join(root, "large-hashed-chunk.js");
+  fs.writeFileSync(file, `const context=\`browser_use\`;${" ".repeat(12000)}`);
+
+  const targets = pluginAuth.findRendererTargets("mac-arm64", root);
+
+  assert.deepEqual(targets, [
+    { platform: "mac-arm64", path: file, rules: ["avail", "gate"] },
+  ]);
 });

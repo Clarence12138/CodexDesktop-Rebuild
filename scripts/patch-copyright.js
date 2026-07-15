@@ -7,6 +7,7 @@
  * Usage:
  *   node scripts/patch-copyright.js [platform]   # Apply patch (unix/win/omit=both)
  *   node scripts/patch-copyright.js --check       # Dry-run: report matches
+ *   node scripts/patch-copyright.js --verify      # Require applied state
  */
 const fs = require("fs");
 const path = require("path");
@@ -110,6 +111,7 @@ function collectPatches(ast, source) {
 function main() {
   const args = process.argv.slice(2);
   const isCheck = args.includes("--check");
+  const isVerify = args.includes("--verify");
   const platform = args.find((a) => ["mac-arm64", "mac-x64", "win"].includes(a));
 
   const bundles = locateBundles({
@@ -134,6 +136,12 @@ function main() {
     console.log(`   parse: ${Date.now() - t0}ms`);
 
     const patches = collectPatches(ast, source);
+
+    if (isVerify && patches.length > 0) {
+      console.error(`   [x] ${patches.length} copyright targets are still patchable`);
+      process.exitCode = 1;
+      continue;
+    }
 
     if (patches.length === 0) {
       // Check if already patched
