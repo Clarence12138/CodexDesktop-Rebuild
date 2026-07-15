@@ -11,6 +11,7 @@
  * Usage:
  *   node scripts/patch-sunset.js [platform]   # Apply patch (unix/win/omit=both)
  *   node scripts/patch-sunset.js --check      # Dry-run: report matches
+ *   node scripts/patch-sunset.js --verify     # Require applied state
  */
 const fs = require("fs");
 const path = require("path");
@@ -143,6 +144,7 @@ function locateTargets(platform) {
 function main() {
   const args = process.argv.slice(2);
   const isCheck = args.includes("--check");
+  const isVerify = args.includes("--verify");
   const platform = args.find((a) => ["mac-arm64", "mac-x64", "win"].includes(a));
 
   const bundles = locateTargets(platform);
@@ -163,6 +165,12 @@ function main() {
     console.log(`   parse: ${Date.now() - t0}ms`);
 
     const { patches, verified } = collectPatches(ast, source);
+
+    if (isVerify && patches.length > 0) {
+      console.error(`   [x] ${patches.length} sunset gates are still patchable`);
+      process.exitCode = 1;
+      continue;
+    }
 
     if (patches.length === 0) {
       if (verified > 0) {

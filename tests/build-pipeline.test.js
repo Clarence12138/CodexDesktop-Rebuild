@@ -16,6 +16,10 @@ const buildWinSource = fs.readFileSync(
   path.join(__dirname, "../scripts/build-win.js"),
   "utf8",
 );
+const rebuildSource = fs.readFileSync(
+  path.join(__dirname, "../scripts/rebuild.js"),
+  "utf8",
+);
 
 test("findAppBundle accepts ChatGPT.app and ignores unrelated app directories", (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-app-locator-"));
@@ -62,4 +66,9 @@ test("native desktop builds preserve the upstream Codex core", () => {
   assert.doesNotMatch(buildWinSource, /replaceCodex/);
   assert.match(buildMacSource, /preserved upstream binary/);
   assert.match(buildWinSource, /preserved upstream binary/);
+});
+
+test("rebuild requires strict applied-patch verification before packaging", () => {
+  assert.match(rebuildSource, /patch-all\.js", \[platform, "--verify"\]/);
+  assert.doesNotMatch(rebuildSource, /patch-all\.js", \[platform, "--check"\]/);
 });

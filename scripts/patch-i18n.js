@@ -12,6 +12,7 @@
  * Usage:
  *   node scripts/patch-i18n.js [platform]   # Apply (mac-arm64/mac-x64/win/omit=all)
  *   node scripts/patch-i18n.js --check      # Dry-run
+ *   node scripts/patch-i18n.js --verify     # Require applied state
  */
 const fs = require("fs");
 const path = require("path");
@@ -155,6 +156,7 @@ function locateTargets(platform) {
 function main() {
   const args = process.argv.slice(2);
   const isCheck = args.includes("--check");
+  const isVerify = args.includes("--verify");
   const platform = args.find((a) => ["mac-arm64", "mac-x64", "win"].includes(a));
 
   const targets = locateTargets(platform);
@@ -177,6 +179,12 @@ function main() {
 
     const patches = collectPatches(ast, source);
     grandTotal += patches.length;
+
+    if (isVerify && patches.length > 0) {
+      console.error(`   [x] ${patches.length} i18n gates are still patchable`);
+      process.exitCode = 1;
+      continue;
+    }
 
     if (patches.length === 0) {
       if (source.includes("/* enable_i18n */")) {

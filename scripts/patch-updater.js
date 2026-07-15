@@ -38,7 +38,7 @@ function walk(node, visitor) {
 
 function collectPatches(ast, source) {
   const patches = [];
-  let verified = 0;
+  const verifiedIds = new Set();
 
   walk(ast, (node) => {
     // Match: Property with key being an updater method name and value being a FunctionExpression
@@ -56,7 +56,7 @@ function collectPatches(ast, source) {
 
     const retSrc = source.slice(ret.argument.start, ret.argument.end);
     if (retSrc === "!1") {
-      verified++;
+      verifiedIds.add(keyName);
       return;
     }
 
@@ -69,7 +69,7 @@ function collectPatches(ast, source) {
     });
   });
 
-  return { patches, verified };
+  return { patches, verified: verifiedIds.size, verifiedIds };
 }
 
 function locateTargets(platform) {
@@ -101,6 +101,7 @@ function locateTargets(platform) {
 function main() {
   const args = process.argv.slice(2);
   const isCheck = args.includes("--check");
+  const isVerify = args.includes("--verify");
   const platform = args.find((a) => ["mac-arm64", "mac-x64", "win"].includes(a));
 
   const targets = locateTargets(platform);
@@ -111,12 +112,21 @@ function main() {
 
   let totalPatched = 0;
   let totalVerified = 0;
+  const verifiedIds = new Set();
   for (const bundle of targets) {
     console.log(`  [${bundle.platform}] ${relPath(bundle.path)}`);
     const source = fs.readFileSync(bundle.path, "utf-8");
     const ast = parse(source, { ecmaVersion: "latest", sourceType: "module" });
-    const { patches, verified } = collectPatches(ast, source);
+    const result = collectPatches(ast, source);
+    const { patches, verified } = result;
     totalVerified += verified;
+    for (const id of result.verifiedIds) verifiedIds.add(id);
+
+    if (isVerify && patches.length > 0) {
+      console.error(`    [x] ${patches.length} updater methods are still patchable`);
+      process.exitCode = 1;
+      continue;
+    }
 
     if (patches.length === 0) {
       if (verified > 0) {
@@ -147,6 +157,13 @@ function main() {
     console.log(`    [ok] ${patches.length} updater methods disabled`);
   }
 
+  if (isVerify) {
+    const missing = [...UPDATER_METHODS].filter((id) => !verifiedIds.has(id));
+    if (missing.length > 0) {
+      console.error(`[x] Updater methods are not verified: ${missing.join(", ")}`);
+      process.exitCode = 1;
+    }
+  }
   if (totalPatched === 0 && totalVerified === 0) process.exitCode = 1;
 }
 

@@ -5,6 +5,24 @@ const FEATURE_CONTEXTS = new Set([
   "computer_use",
   "browser_use_external",
 ]);
+const REQUIRED_RENDERER_PATCH_IDS = new Set([
+  "browser_use_allowed",
+  "browser_use_available",
+]);
+const REQUIRED_RENDERER_PATCH_PREFIXES = Object.freeze(["statsig_gate_"]);
+// Auth and Goal rules are opportunistic because current upstream builds may
+// expose those capabilities without dedicated renderer gates.
+
+function markedReplacement(replacement, id) {
+  return `${replacement}/* ${id} */`;
+}
+
+function findVerifiedRendererPatchIds(source) {
+  const verified = new Set();
+  const pattern = /\/\* ((?:browser_use_(?:allowed|available))|(?:plugin_auth_gate)|(?:goal_gate_bypass)|(?:statsig_gate_\d+)) \*\//g;
+  for (const match of source.matchAll(pattern)) verified.add(match[1]);
+  return verified;
+}
 
 function isFunction(node) {
   return ["FunctionDeclaration", "FunctionExpression"].includes(node.type);
@@ -28,7 +46,7 @@ function findPluginAuthPatches(ast, source) {
       id: "plugin_auth_gate",
       start: argument.start,
       end: argument.end,
-      replacement: "!1",
+      replacement: markedReplacement("!1", "plugin_auth_gate"),
       original: source.slice(argument.start, argument.end),
     });
   });
@@ -56,7 +74,7 @@ function findGoalGatePatches(ast, source) {
       id: "goal_gate_bypass",
       start: node.start,
       end: node.end,
-      replacement: rightSource,
+      replacement: markedReplacement(rightSource, "goal_gate_bypass"),
       original: `${fullSource.slice(0, 50)}...`,
     });
   });
@@ -85,7 +103,7 @@ function findBrowserAvailPatches(ast, source) {
           id: `browser_use_${name}`,
           start: property.value.start,
           end: property.value.end,
-          replacement: "!0",
+          replacement: markedReplacement("!0", `browser_use_${name}`),
           original: value,
         });
       }
@@ -112,7 +130,7 @@ function findStatsigGatePatches(ast, source) {
         id: `statsig_gate_${value}`,
         start: inner.start,
         end: inner.end,
-        replacement: "!0",
+        replacement: markedReplacement("!0", `statsig_gate_${value}`),
         original: source.slice(inner.start, inner.end),
       });
     });
@@ -121,8 +139,11 @@ function findStatsigGatePatches(ast, source) {
 }
 
 module.exports = {
+  REQUIRED_RENDERER_PATCH_IDS,
+  REQUIRED_RENDERER_PATCH_PREFIXES,
   findBrowserAvailPatches,
   findGoalGatePatches,
   findPluginAuthPatches,
   findStatsigGatePatches,
+  findVerifiedRendererPatchIds,
 };
