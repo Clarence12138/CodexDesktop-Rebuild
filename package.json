@@ -1,7 +1,7 @@
 {
   "name": "codex-rebuild",
   "productName": "Codex",
-  "version": "26.707.72221",
+  "version": "26.715.21425",
   "description": "Codex Desktop App - macOS rebuild",
   "main": "src/.vite/build/bootstrap.js",
   "scripts": {
@@ -45,7 +45,7 @@
     "zod": "^4.1.13"
   },
   "codexBuildFlavor": "prod",
-  "codexBuildNumber": "5307",
+  "codexBuildNumber": "5488",
   "codexSparkleFeedUrl": "https://persistent.oaistatic.com/codex-app-prod/appcast.xml",
   "codexSparklePublicKey": "rhcBvttuqDFriyNqwTQJR3L4UT1WjIK4QxtwtwusVic="
 }
