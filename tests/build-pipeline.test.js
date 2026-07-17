@@ -6,6 +6,7 @@ const test = require("node:test");
 
 const { findAppBundle, readPeMachine, verifyPeX64 } = require("../scripts/build-common");
 const { parsePlatform } = require("../scripts/build-from-upstream");
+const { resolveLinuxMain } = require("../scripts/prepare-src");
 const { parseArgs, selectedPlatforms, syncArgs } = require("../scripts/rebuild");
 
 const buildMacSource = fs.readFileSync(
@@ -89,4 +90,19 @@ test("Windows artifact validation rejects non-x64 PE binaries", (t) => {
   buffer.writeUInt16LE(0xaa64, 68);
   fs.writeFileSync(binary, buffer);
   assert.throws(() => verifyPeX64(binary), /is not x64 PE/);
+});
+
+test("Linux build uses a validated upstream main entry", (t) => {
+  const srcDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-linux-main-"));
+  t.after(() => fs.rmSync(srcDir, { force: true, recursive: true }));
+  const entry = path.join(srcDir, ".vite", "build", "early-bootstrap.js");
+  fs.mkdirSync(path.dirname(entry), { recursive: true });
+  fs.writeFileSync(entry, "// entry");
+
+  assert.equal(
+    resolveLinuxMain({ upstreamMain: ".vite/build/early-bootstrap.js", srcDir }),
+    "src/.vite/build/early-bootstrap.js",
+  );
+  assert.throws(() => resolveLinuxMain({ upstreamMain: "../escape.js", srcDir }), /Unsafe/);
+  assert.throws(() => resolveLinuxMain({ upstreamMain: "missing.js", srcDir }), /not found/);
 });

@@ -73,6 +73,39 @@ function getZipExtractor(archive, destination, platform = process.platform) {
   return null;
 }
 
+function decodeArchiveEntryName(name) {
+  let decoded;
+  try {
+    decoded = decodeURIComponent(name);
+  } catch (error) {
+    throw new Error(`Invalid URI-encoded archive entry name: ${name}`, { cause: error });
+  }
+  if ([".", ".."].includes(decoded) || /[\\/\0]/.test(decoded)) {
+    throw new Error(`Unsafe decoded archive entry name: ${name} -> ${decoded}`);
+  }
+  return decoded;
+}
+
+function decodeUriEncodedTree(rootDir) {
+  let renamed = 0;
+  function visit(directory) {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      const source = path.join(directory, entry.name);
+      if (entry.isDirectory()) visit(source);
+      const decodedName = decodeArchiveEntryName(entry.name);
+      if (decodedName === entry.name) continue;
+      const destination = path.join(directory, decodedName);
+      if (fs.existsSync(destination)) {
+        throw new Error(`Decoded archive entry collides with existing path: ${destination}`);
+      }
+      fs.renameSync(source, destination);
+      renamed += 1;
+    }
+  }
+  visit(rootDir);
+  return renamed;
+}
+
 function findFile(dir, name) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     const fullPath = path.join(dir, entry.name);
@@ -208,6 +241,7 @@ function inspectMacApp(appPath, expected = {}, platform = process.platform) {
 
 module.exports = {
   clearDir,
+  decodeUriEncodedTree,
   findFile,
   findMacApp,
   getZipExtractor,

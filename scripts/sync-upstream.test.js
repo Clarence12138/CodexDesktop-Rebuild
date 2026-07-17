@@ -4,6 +4,7 @@ const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 const {
+  decodeUriEncodedTree,
   findMacApp,
   getZipExtractor,
   parseArchitectures,
@@ -42,6 +43,28 @@ test("ZIP extraction uses platform-native tools", () => {
     args: ["-q", "Codex.zip", "-d", "/tmp/out"],
   });
   assert.equal(getZipExtractor("Codex.msix", "/tmp/out", "win32"), null);
+});
+
+test("MSIX path decoding is recursive and rejects unsafe names", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "msix-paths-"));
+  t.after(() => fs.rmSync(root, { force: true, recursive: true }));
+  const encodedDir = path.join(root, "%40scope");
+  fs.mkdirSync(encodedDir);
+  fs.writeFileSync(path.join(encodedDir, "%24binding.node"), "native");
+
+  assert.equal(decodeUriEncodedTree(root), 2);
+  assert.equal(fs.readFileSync(path.join(root, "@scope", "$binding.node"), "utf8"), "native");
+
+  fs.writeFileSync(path.join(root, "%2Fescape"), "unsafe");
+  assert.throws(() => decodeUriEncodedTree(root), /Unsafe decoded archive entry name/);
+  fs.rmSync(path.join(root, "%2Fescape"));
+
+  fs.writeFileSync(path.join(root, "%40collision"), "encoded");
+  fs.writeFileSync(path.join(root, "@collision"), "decoded");
+  assert.throws(() => decodeUriEncodedTree(root), /collides with existing path/);
+  fs.rmSync(path.join(root, "%40collision"));
+  fs.writeFileSync(path.join(root, "%invalid"), "malformed");
+  assert.throws(() => decodeUriEncodedTree(root), /Invalid URI-encoded archive entry name/);
 });
 
 test("findMacApp locates an arbitrarily named app containing app.asar", () => {
