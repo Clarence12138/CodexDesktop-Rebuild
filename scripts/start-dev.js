@@ -13,33 +13,20 @@ const fs = require('fs');
 const platform = process.platform;
 const arch = os.arch();
 
-// Map to CLI binary paths
-const platformMap = {
-  darwin: {
-    x64: 'darwin-x64',
-    arm64: 'darwin-arm64',
-  },
-  linux: {
-    x64: 'linux-x64',
-    arm64: 'linux-arm64',
-  },
-  win32: {
-    x64: 'win32-x64',
-  },
-};
-
-const binDir = platformMap[platform]?.[arch];
+const binDir = { arm64: 'darwin-arm64', x64: 'darwin-x64' }[arch];
+if (platform !== 'darwin') {
+  console.error(`Unsupported platform: ${platform}; macOS is required`);
+  process.exit(1);
+}
 if (!binDir) {
-  console.error(`Unsupported platform/arch: ${platform}/${arch}`);
+  console.error(`Unsupported macOS architecture: ${arch}`);
   process.exit(1);
 }
 
-const cliName = platform === 'win32' ? 'codex.exe' : 'codex';
+const cliName = 'codex';
 
 // Priority: upstream CLI from src/ > @cometix/codex vendor > resources/bin/
-const srcPlatform = platform === 'darwin'
-  ? (arch === 'arm64' ? 'mac-arm64' : 'mac-x64')
-  : platform === 'win32' ? 'win' : `${platform}-${arch}`;
+const srcPlatform = arch === 'arm64' ? 'mac-arm64' : 'mac-x64';
 
 const candidates = [
   // 1. Upstream CLI (from sync-upstream, matches app version)
@@ -49,16 +36,10 @@ const candidates = [
     const pkgMap = {
       'darwin-arm64': 'codex-darwin-arm64',
       'darwin-x64': 'codex-darwin-x64',
-      'linux-arm64': 'codex-linux-arm64',
-      'linux-x64': 'codex-linux-x64',
-      'win32-x64': 'codex-win32-x64',
     };
     const tripleMap = {
       'darwin-arm64': 'aarch64-apple-darwin',
       'darwin-x64': 'x86_64-apple-darwin',
-      'linux-arm64': 'aarch64-unknown-linux-musl',
-      'linux-x64': 'x86_64-unknown-linux-musl',
-      'win32-x64': 'x86_64-pc-windows-msvc',
     };
     const pkg = pkgMap[binDir], triple = tripleMap[binDir];
     if (!pkg || !triple) return null;

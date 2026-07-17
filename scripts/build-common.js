@@ -3,14 +3,27 @@ const fs = require("fs");
 const path = require("path");
 const { execFileSync } = require("child_process");
 
-const ELECTRON_FUSE_SENTINEL = Buffer.from("dL7pKGdnNz796PbbjQWNKmHXBZaB9tsX", "ascii");
-const SHA256_HEX_PATTERN = /^[0-9a-f]{64}$/;
+function createUnpackDirectoryExpression(unpackDirectories) {
+  if (!unpackDirectories || unpackDirectories.length === 0) return null;
+  for (const directory of unpackDirectories) {
+    if (!directory || /[{},]/.test(directory) || path.isAbsolute(directory)) {
+      throw new Error(`Invalid ASAR unpack directory: ${directory}`);
+    }
+  }
+  return unpackDirectories.length === 1
+    ? unpackDirectories[0]
+    : `{${unpackDirectories.join(",")}}`;
+}
 
-function packAsar({ source, destination, cwd }) {
+function packAsar({ source, destination, cwd, unpackDirectories = [] }) {
   const asarLibrary = require.resolve("@electron/asar");
   const asarCli = path.resolve(path.dirname(asarLibrary), "..", "bin", "asar.mjs");
   if (!fs.existsSync(asarCli)) throw new Error(`ASAR CLI not found: ${asarCli}`);
-  execFileSync(process.execPath, [asarCli, "pack", source, destination], {
+  const args = [asarCli, "pack"];
+  const unpackExpression = createUnpackDirectoryExpression(unpackDirectories);
+  if (unpackExpression) args.push("--unpack-dir", unpackExpression);
+  args.push(source, destination);
+  execFileSync(process.execPath, args, {
     cwd,
     stdio: "inherit",
   });
@@ -19,25 +32,6 @@ function packAsar({ source, destination, cwd }) {
 function clearDir(dir) {
   fs.rmSync(dir, { force: true, recursive: true });
   fs.mkdirSync(dir, { recursive: true });
-}
-
-function copyRecursive(source, destination) {
-  fs.mkdirSync(destination, { recursive: true });
-  let count = 0;
-  for (const entry of fs.readdirSync(source, { withFileTypes: true })) {
-    const sourcePath = path.join(source, entry.name);
-    const destinationPath = path.join(destination, entry.name);
-    if (entry.isDirectory()) {
-      count += copyRecursive(sourcePath, destinationPath);
-    } else if (entry.isSymbolicLink()) {
-      fs.symlinkSync(fs.readlinkSync(sourcePath), destinationPath);
-      count += 1;
-    } else {
-      fs.copyFileSync(sourcePath, destinationPath);
-      count += 1;
-    }
-  }
-  return count;
 }
 
 function computeAsarHeaderHash(asarPath) {
@@ -72,102 +66,11 @@ function getVersion(asarDir) {
   return appPackage.version;
 }
 
-function patchExeHash(exePath, oldHash, newHash) {
-  const buffer = fs.readFileSync(exePath);
-  const index = buffer.indexOf(Buffer.from(oldHash, "ascii"));
-  if (index < 0) throw new Error(`Original ASAR hash not found in ${exePath}`);
-  Buffer.from(newHash, "ascii").copy(buffer, index);
-  fs.writeFileSync(exePath, buffer);
-  if (!fs.readFileSync(exePath).includes(Buffer.from(newHash, "ascii"))) {
-    throw new Error(`Updated ASAR hash not found in ${exePath}`);
-  }
-  console.log(`   [integrity] executable hash patched at offset ${index}`);
-}
-
-function readOwlRuntimeMetadata(resourcesDir) {
-  const metadataPath = path.join(resourcesDir, "owl-electron-app.json");
-  if (!fs.existsSync(metadataPath)) return null;
-
-  let metadata;
-  try {
-    metadata = JSON.parse(fs.readFileSync(metadataPath, "utf8"));
-  } catch (error) {
-    throw new Error(`Invalid Owl runtime metadata ${metadataPath}: ${error.message}`);
-  }
-  if (!metadata || Array.isArray(metadata) || metadata.runtimeName !== "owl") {
-    throw new Error(`Unsupported runtime metadata in ${metadataPath}`);
-  }
-  return metadata;
-}
-
-function updateWindowsAsarIntegrity({ executablePath, resourcesDir, oldHash, newHash }) {
-  if (!SHA256_HEX_PATTERN.test(oldHash) || !SHA256_HEX_PATTERN.test(newHash)) {
-    throw new Error("ASAR integrity values must be lowercase SHA-256 hashes");
-  }
-  if (oldHash === newHash) return "unchanged";
-
-  const executable = fs.readFileSync(executablePath);
-  if (executable.includes(Buffer.from(oldHash, "ascii"))) {
-    patchExeHash(executablePath, oldHash, newHash);
-    return "electron";
-  }
-
-  const owlRuntime = readOwlRuntimeMetadata(resourcesDir);
-  if (!owlRuntime) {
-    throw new Error(`Original ASAR hash not found in ${executablePath}; runtime is not Owl`);
-  }
-  if (executable.includes(ELECTRON_FUSE_SENTINEL)) {
-    throw new Error(`${executablePath}: Owl runtime unexpectedly contains an Electron fuse wire`);
-  }
-  console.log("   [integrity] Owl runtime verified; no Electron ASAR hash is embedded");
-  return "owl";
-}
-
-const PE_MACHINE_X64 = 0x8664;
-const DOS_HEADER_SIZE = 64;
-const PE_POINTER_OFFSET = 0x3c;
-const PE_HEADER_PREFIX_SIZE = 6;
-
-function readPeMachine(binaryPath) {
-  const handle = fs.openSync(binaryPath, "r");
-  try {
-    const dosHeader = Buffer.alloc(DOS_HEADER_SIZE);
-    if (fs.readSync(handle, dosHeader, 0, dosHeader.length, 0) !== dosHeader.length) {
-      throw new Error(`${binaryPath} is not a PE executable`);
-    }
-    if (dosHeader.toString("ascii", 0, 2) !== "MZ") {
-      throw new Error(`${binaryPath} is not a PE executable`);
-    }
-    const peOffset = dosHeader.readUInt32LE(PE_POINTER_OFFSET);
-    const peHeader = Buffer.alloc(PE_HEADER_PREFIX_SIZE);
-    if (fs.readSync(handle, peHeader, 0, peHeader.length, peOffset) !== peHeader.length) {
-      throw new Error(`${binaryPath} has an invalid PE header`);
-    }
-    if (peHeader.toString("ascii", 0, 4) !== "PE\0\0") {
-      throw new Error(`${binaryPath} has an invalid PE header`);
-    }
-    return peHeader.readUInt16LE(4);
-  } finally {
-    fs.closeSync(handle);
-  }
-}
-
-function verifyPeX64(binaryPath) {
-  const machine = readPeMachine(binaryPath);
-  if (machine !== PE_MACHINE_X64) {
-    throw new Error(`${binaryPath} is not x64 PE (machine 0x${machine.toString(16)})`);
-  }
-}
-
 module.exports = {
   clearDir,
   computeAsarHeaderHash,
-  copyRecursive,
+  createUnpackDirectoryExpression,
   findAppBundle,
   getVersion,
   packAsar,
-  patchExeHash,
-  readPeMachine,
-  updateWindowsAsarIntegrity,
-  verifyPeX64,
 };

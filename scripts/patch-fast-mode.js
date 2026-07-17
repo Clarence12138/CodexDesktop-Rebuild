@@ -3,13 +3,13 @@
 const fs = require("fs");
 const path = require("path");
 const { parse } = require("acorn");
-const { relPath, SRC_DIR } = require("./patch-util");
+const { parsePatchArgs, relPath, SRC_DIR } = require("./patch-util");
 const {
   REQUIRED_PATCH_IDS,
   collectFastModePatches,
 } = require("./patch-fast-mode-rules");
 
-const PLATFORMS = Object.freeze(["mac-arm64", "mac-x64", "win"]);
+const PLATFORMS = Object.freeze(["mac-arm64", "mac-x64"]);
 const TARGET_MARKERS = Object.freeze([
   "fast_mode",
   "serviceTierForRequest",
@@ -73,8 +73,7 @@ function processTarget(target, options) {
 }
 
 function main() {
-  const args = process.argv.slice(2);
-  const platform = args.find((arg) => PLATFORMS.includes(arg));
+  const { isCheck, isVerify, platform } = parsePatchArgs(process.argv.slice(2));
   const platforms = platform
     ? [platform]
     : PLATFORMS.filter((name) => fs.existsSync(path.join(SRC_DIR, name, "_asar")));
@@ -82,8 +81,8 @@ function main() {
   if (targets.length === 0) throw new Error("No Fast mode targets found");
 
   const options = {
-    isCheck: args.includes("--check"),
-    isVerify: args.includes("--verify"),
+    isCheck,
+    isVerify,
     satisfied: new Set(),
   };
   for (const target of targets) processTarget(target, options);

@@ -2,7 +2,7 @@
 /**
  * check-update.js — Codex 版本检测工具
  *
- * 检查 macOS (Sparkle appcast) 和 Windows (MS Store) 的最新版本
+ * 检查 macOS Sparkle appcast 的最新版本
  * 与本地记录对比，仅在有更新时输出
  *
  * 用法:
@@ -13,29 +13,17 @@
  */
 
 const https = require("https");
-const tls = require("tls");
 const { XMLParser } = require("fast-xml-parser");
 const fs = require("fs");
 const path = require("path");
 
-// ─── 证书注入（复用 fetch-msstore 的 CA 补丁）─────────────────────
-const certsDir = path.join(__dirname, "certs");
-const extraCAs = [...tls.rootCertificates];
-for (const f of ["ms-root-ca.pem", "ms-update-ca.pem"]) {
-  const p = path.join(certsDir, f);
-  if (fs.existsSync(p)) extraCAs.push(fs.readFileSync(p, "utf-8"));
-}
-https.globalAgent.options.ca = extraCAs;
-
 // ─── 常量 ────────────────────────────────────────────────────────
 const APPCAST_ARM64 = "https://persistent.oaistatic.com/codex-app-prod/appcast.xml";
 const APPCAST_X64 = "https://persistent.oaistatic.com/codex-app-prod/appcast-x64.xml";
-const MS_STORE_PRODUCT_ID = "9plm9xgg6vks";
 const VERSION_FILE = path.join(__dirname, ".versions.json");
 const VERSION_KEY_ALIASES = {
   "macOS-arm64": ["macOS-arm64", "mac-arm64"],
   "macOS-x64": ["macOS-x64", "mac-x64"],
-  Windows: ["Windows", "win"],
 };
 
 // ─── HTTP 辅助 ───────────────────────────────────────────────────
@@ -96,53 +84,6 @@ async function checkAppcast(url, platformLabel) {
   };
 }
 
-// ─── Windows: MS Store ───────────────────────────────────────────
-async function checkWindowsVersion() {
-  // 动态加载 fetch-msstore 的模块 API
-  const msstore = require("./fetch-msstore");
-
-  const cookie = await msstore.getCookie();
-  const appInfo = await msstore.getAppInfo(MS_STORE_PRODUCT_ID, "US");
-
-  if (!appInfo.categoryId) {
-    throw new Error("无法获取 MS Store CategoryID");
-  }
-
-  const packages = await msstore.getFileList(
-    cookie,
-    appInfo.categoryId,
-    "Retail"
-  );
-
-  if (packages.length === 0) {
-    throw new Error("MS Store 未返回任何包");
-  }
-
-  // The rebuild currently publishes Windows x64. Store ordering is not stable
-  // and may return arm64 first, so select the architecture explicitly.
-  const pkg = msstore.selectPackageForArchitecture(packages, "x64");
-  const versionMatch = pkg.name.match(/_(\d+\.\d+\.\d+(?:\.\d+)?)_/);
-  const version = versionMatch ? versionMatch[1] : "unknown";
-
-  // 获取下载链接
-  const url = await msstore.getDownloadUrl(
-    pkg.updateID,
-    pkg.revisionNumber,
-    "Retail",
-    pkg.digest
-  );
-
-  return {
-    platform: "Windows",
-    version,
-    build: "",
-    pubDate: "",
-    downloadUrl: url,
-    size: Number(pkg.size || 0),
-    packageName: pkg.name,
-  };
-}
-
 // ─── 版本记录读写 ────────────────────────────────────────────────
 function loadVersions() {
   try {
@@ -181,27 +122,18 @@ async function main() {
   const quiet = jsonOutput || args.includes("--quiet") || args.includes("-q");
 
   const saved = loadVersions();
-  const results = [];
   const updates = [];
-
-  const checks = await Promise.allSettled([
+  const results = await Promise.all([
     checkMacArm64Version(),
     checkMacX64Version(),
-    checkWindowsVersion(),
   ]);
 
-  for (const r of checks) {
-    if (r.status === "fulfilled") {
-      const info = r.value;
-      results.push(info);
-      const savedInfo = getSavedVersion(saved, info.platform);
-      const savedBuild = String(savedInfo?.build || "");
-      const currentBuild = String(info.build || "");
-      const isNew = !savedInfo || savedInfo.version !== info.version || savedBuild !== currentBuild;
-      if (isNew) updates.push(info);
-    } else if (!quiet) {
-      console.error(`  [!] ${r.reason.message}`);
-    }
+  for (const info of results) {
+    const savedInfo = getSavedVersion(saved, info.platform);
+    const savedBuild = String(savedInfo?.build || "");
+    const currentBuild = String(info.build || "");
+    const isNew = !savedInfo || savedInfo.version !== info.version || savedBuild !== currentBuild;
+    if (isNew) updates.push(info);
   }
 
   // JSON 输出模式
@@ -262,7 +194,7 @@ async function main() {
   return { results, updates };
 }
 
-module.exports = { checkMacArm64Version, checkMacX64Version, checkWindowsVersion };
+module.exports = { checkMacArm64Version, checkMacX64Version };
 
 if (require.main === module) {
   main().catch((e) => {

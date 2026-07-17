@@ -13,13 +13,13 @@
  * Fallback: index-*.js (older builds)
  *
  * Usage:
- *   node scripts/patch-statsig-logger.js [platform]   # Apply patch (unix/win/omit=both)
+ *   node scripts/patch-statsig-logger.js [platform]   # Apply to one or both macOS architectures
  *   node scripts/patch-statsig-logger.js --check      # Dry-run: report matches
  */
 const fs = require("fs");
 const path = require("path");
 const { parse } = require("acorn");
-const { locateBundles, relPath } = require("./patch-util");
+const { locateBundles, parsePatchArgs, relPath } = require("./patch-util");
 
 // ──────────────────────────────────────────────
 //  AST walker
@@ -163,9 +163,9 @@ function locateTargets(platform) {
 // ──────────────────────────────────────────────
 
 function main() {
-  const args = process.argv.slice(2);
-  const isCheck = args.includes("--check");
-  const platform = args.find((a) => a === "unix" || a === "win");
+  const { isCheck, platform } = parsePatchArgs(process.argv.slice(2), {
+    allowedFlags: ["--check"],
+  });
 
   const bundles = locateTargets(platform);
 

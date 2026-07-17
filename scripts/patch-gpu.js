@@ -12,7 +12,7 @@
  */
 const fs = require("fs");
 const acorn = require("acorn");
-const { locateBundles, relPath } = require("./patch-util");
+const { locateBundles, parsePatchArgs, relPath } = require("./patch-util");
 
 const SWITCH_NAME = "force_high_performance_gpu";
 const INJECT_LINE = `require("electron").app.commandLine.appendSwitch("${SWITCH_NAME}");`;
@@ -56,10 +56,7 @@ function verifyElectronBootstrap(code) {
 }
 
 function main() {
-  const args = process.argv.slice(2);
-  const platform = args.find((a) =>
-    ["mac-arm64", "mac-x64", "win"].includes(a),
-  );
+  const { platform } = parsePatchArgs(process.argv.slice(2), { allowedFlags: [] });
 
   if (platform && platform !== "mac-x64") {
     console.log("  [skip] GPU patch only applies to mac-x64");

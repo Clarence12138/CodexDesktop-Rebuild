@@ -9,7 +9,7 @@
  */
 const fs = require("fs");
 const path = require("path");
-const { SRC_DIR, relPath } = require("./patch-util");
+const { parsePatchArgs, SRC_DIR, relPath } = require("./patch-util");
 
 const ASSET_REQUIREMENTS = Object.freeze({
   route: [
@@ -75,13 +75,10 @@ function validatePlatform(platform, sourceRoot = SRC_DIR) {
 }
 
 function main() {
-  const args = process.argv.slice(2);
-  const requested = args.find((arg) =>
-    ["mac-arm64", "mac-x64", "win"].includes(arg),
-  );
+  const { platform: requested } = parsePatchArgs(process.argv.slice(2));
   const platforms = requested
     ? [requested]
-    : ["mac-arm64", "mac-x64", "win"].filter((platform) =>
+    : ["mac-arm64", "mac-x64"].filter((platform) =>
         fs.existsSync(path.join(SRC_DIR, platform, "_asar")),
       );
 

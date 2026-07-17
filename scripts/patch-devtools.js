@@ -8,14 +8,14 @@
  *   - devTools: <expr containing allowDevtools>  ->  devTools: !0
  *
  * Usage:
- *   node scripts/patch-devtools.js [platform]   # Apply patch (unix/win/omit=both)
+ *   node scripts/patch-devtools.js [platform]   # Apply to one or both macOS architectures
  *   node scripts/patch-devtools.js --check      # Dry-run: report matches
  *   node scripts/patch-devtools.js --verify     # Require both capabilities applied
  */
 const fs = require("fs");
 const path = require("path");
 const { parse } = require("acorn");
-const { locateBundles, relPath } = require("./patch-util");
+const { locateBundles, parsePatchArgs, relPath } = require("./patch-util");
 
 // ──────────────────────────────────────────────
 //  AST walker
@@ -83,10 +83,7 @@ const REQUIRED_RULE_IDS = new Set(RULES.map((rule) => rule.id));
 // ──────────────────────────────────────────────
 
 function main() {
-  const args = process.argv.slice(2);
-  const isCheck = args.includes("--check");
-  const isVerify = args.includes("--verify");
-  const platform = args.find((a) => ["mac-arm64", "mac-x64", "win"].includes(a));
+  const { isCheck, isVerify, platform } = parsePatchArgs(process.argv.slice(2));
 
   const bundles = locateBundles({
     dir: "build",

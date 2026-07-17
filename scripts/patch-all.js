@@ -3,14 +3,14 @@
  * Run all patch scripts in sequence.
  *
  * Usage:
- *   node scripts/patch-all.js              # Patch both platforms
- *   node scripts/patch-all.js unix         # Patch unix only
- *   node scripts/patch-all.js win          # Patch win only
+ *   node scripts/patch-all.js              # Patch both macOS architectures
+ *   node scripts/patch-all.js mac-arm64    # Patch one architecture
  *   node scripts/patch-all.js --check      # Dry-run all
  *   node scripts/patch-all.js --verify     # Require all patches to be applied
  */
 const { execFileSync } = require("child_process");
 const path = require("path");
+const { parsePatchArgs } = require("./patch-util");
 
 const PATCHES = [
   "patch-i18n.js",
@@ -24,9 +24,11 @@ const PATCHES = [
 ];
 
 function main() {
-  const args = process.argv.slice(2);
-  const platform = args.find((a) => ["mac-arm64", "mac-x64", "win", "unix"].includes(a));
-  const extra = args.filter((a) => a.startsWith("--"));
+  const { isCheck, isVerify, platform } = parsePatchArgs(process.argv.slice(2));
+  const extra = [
+    ...(isCheck ? ["--check"] : []),
+    ...(isVerify ? ["--verify"] : []),
+  ];
   const passArgs = [...(platform ? [platform] : []), ...extra];
 
   let failed = 0;
