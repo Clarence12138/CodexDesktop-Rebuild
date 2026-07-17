@@ -4,7 +4,7 @@ const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 
-const { findAppBundle } = require("../scripts/build-common");
+const { findAppBundle, readPeMachine, verifyPeX64 } = require("../scripts/build-common");
 const { parsePlatform } = require("../scripts/build-from-upstream");
 const { parseArgs, selectedPlatforms, syncArgs } = require("../scripts/rebuild");
 
@@ -71,4 +71,22 @@ test("native desktop builds preserve the upstream Codex core", () => {
 test("rebuild requires strict applied-patch verification before packaging", () => {
   assert.match(rebuildSource, /patch-all\.js", \[platform, "--verify"\]/);
   assert.doesNotMatch(rebuildSource, /patch-all\.js", \[platform, "--check"\]/);
+});
+
+test("Windows artifact validation rejects non-x64 PE binaries", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-pe-"));
+  t.after(() => fs.rmSync(root, { force: true, recursive: true }));
+  const binary = path.join(root, "Codex.exe");
+  const buffer = Buffer.alloc(128);
+  buffer.write("MZ", 0, "ascii");
+  buffer.writeUInt32LE(64, 0x3c);
+  buffer.write("PE\0\0", 64, "ascii");
+  buffer.writeUInt16LE(0x8664, 68);
+  fs.writeFileSync(binary, buffer);
+
+  assert.equal(readPeMachine(binary), 0x8664);
+  assert.doesNotThrow(() => verifyPeX64(binary));
+  buffer.writeUInt16LE(0xaa64, 68);
+  fs.writeFileSync(binary, buffer);
+  assert.throws(() => verifyPeX64(binary), /is not x64 PE/);
 });

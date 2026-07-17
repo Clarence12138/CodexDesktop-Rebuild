@@ -70,6 +70,42 @@ function patchExeHash(exePath, oldHash, newHash) {
   console.log(`   [integrity] executable hash patched at offset ${index}`);
 }
 
+const PE_MACHINE_X64 = 0x8664;
+const DOS_HEADER_SIZE = 64;
+const PE_POINTER_OFFSET = 0x3c;
+const PE_HEADER_PREFIX_SIZE = 6;
+
+function readPeMachine(binaryPath) {
+  const handle = fs.openSync(binaryPath, "r");
+  try {
+    const dosHeader = Buffer.alloc(DOS_HEADER_SIZE);
+    if (fs.readSync(handle, dosHeader, 0, dosHeader.length, 0) !== dosHeader.length) {
+      throw new Error(`${binaryPath} is not a PE executable`);
+    }
+    if (dosHeader.toString("ascii", 0, 2) !== "MZ") {
+      throw new Error(`${binaryPath} is not a PE executable`);
+    }
+    const peOffset = dosHeader.readUInt32LE(PE_POINTER_OFFSET);
+    const peHeader = Buffer.alloc(PE_HEADER_PREFIX_SIZE);
+    if (fs.readSync(handle, peHeader, 0, peHeader.length, peOffset) !== peHeader.length) {
+      throw new Error(`${binaryPath} has an invalid PE header`);
+    }
+    if (peHeader.toString("ascii", 0, 4) !== "PE\0\0") {
+      throw new Error(`${binaryPath} has an invalid PE header`);
+    }
+    return peHeader.readUInt16LE(4);
+  } finally {
+    fs.closeSync(handle);
+  }
+}
+
+function verifyPeX64(binaryPath) {
+  const machine = readPeMachine(binaryPath);
+  if (machine !== PE_MACHINE_X64) {
+    throw new Error(`${binaryPath} is not x64 PE (machine 0x${machine.toString(16)})`);
+  }
+}
+
 module.exports = {
   clearDir,
   computeAsarHeaderHash,
@@ -77,4 +113,6 @@ module.exports = {
   findAppBundle,
   getVersion,
   patchExeHash,
+  readPeMachine,
+  verifyPeX64,
 };

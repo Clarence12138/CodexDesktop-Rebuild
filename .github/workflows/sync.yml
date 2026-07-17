@@ -11,12 +11,25 @@ on:
 env:
   NODE_VERSION: "24"
 
+concurrency:
+  group: sync-upstream-release
+  cancel-in-progress: false
+
 jobs:
   check:
     runs-on: ubuntu-latest
     outputs:
       has_update: ${{ steps.detect.outputs.has_update }}
     steps:
+      - name: Validate release branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_REF" != "refs/heads/master" ]; then
+            echo "::error::Full releases must be dispatched from master, got $GITHUB_REF."
+            exit 1
+          fi
+
       - name: Checkout
         uses: actions/checkout@v6
 
@@ -115,6 +128,9 @@ jobs:
         run: |
           npm ci
 
+      - name: Run tests
+        run: npm test
+
       - name: Install tools
         run: |
           choco install 7zip -y
@@ -130,8 +146,21 @@ jobs:
       - name: Patch
         run: node scripts/patch-all.js win
 
+      - name: Verify patches
+        run: node scripts/patch-all.js win --verify
+
       - name: Build
         run: npm run build:win-x64
+
+      - name: Smoke test packaged app
+        shell: pwsh
+        run: |
+          $process = Start-Process "out/win/Codex-win32-x64/Codex.exe" -ArgumentList "--disable-gpu" -PassThru
+          Start-Sleep -Seconds 15
+          if ($process.HasExited) {
+            throw "Packaged Codex.exe exited during smoke test with code $($process.ExitCode)"
+          }
+          Stop-Process -Id $process.Id -Force
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v7
@@ -209,11 +238,47 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Download all artifacts
+        uses: actions/download-artifact@v7
+        with:
+          path: artifacts
+
+      - name: Validate release artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          require_one() {
+            local directory="$1"
+            local pattern="$2"
+            local label="$3"
+            local count
+            count="$(find "$directory" -type f -name "$pattern" | wc -l | tr -d ' ')"
+            if [ "$count" != "1" ]; then
+              echo "::error::Expected exactly one $label artifact, found $count."
+              exit 1
+            fi
+          }
+
+          require_one artifacts/Codex-macOS-x64 '*.dmg' 'macOS x64 DMG'
+          require_one artifacts/Codex-macOS-arm64 '*.dmg' 'macOS arm64 DMG'
+          require_one artifacts/Codex-Windows-x64 '*.zip' 'Windows x64 ZIP'
+          require_one artifacts/Codex-Linux-x64 '*.deb' 'Linux x64 DEB'
+          require_one artifacts/Codex-Linux-x64 '*.rpm' 'Linux x64 RPM'
+          require_one artifacts/Codex-Linux-x64 '*.zip' 'Linux x64 ZIP'
+          require_one artifacts/Codex-Linux-arm64 '*.deb' 'Linux arm64 DEB'
+          require_one artifacts/Codex-Linux-arm64 '*.rpm' 'Linux arm64 RPM'
+          require_one artifacts/Codex-Linux-arm64 '*.zip' 'Linux arm64 ZIP'
+
       - name: Get upstream version and tag
         id: version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -euo pipefail
           RESULT=$(node scripts/check-update.js --json --force)
           MAC_ARM64=$(echo "$RESULT" | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{const j=JSON.parse(d);console.log(j.platforms?.['macOS-arm64']?.version||'')}catch{console.log('')}})")
+          MAC_ARM64_BUILD=$(echo "$RESULT" | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{const j=JSON.parse(d);console.log(j.platforms?.['macOS-arm64']?.build||'')}catch{console.log('')}})")
           MAC_X64=$(echo "$RESULT" | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{const j=JSON.parse(d);console.log(j.platforms?.['macOS-x64']?.version||'')}catch{console.log('')}})")
           WIN_VER=$(echo "$RESULT" | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{const j=JSON.parse(d);console.log(j.platforms?.Windows?.version||'')}catch{console.log('')}})")
 
@@ -223,7 +288,20 @@ jobs:
           echo "mac_x64=$MAC_X64" >> "$GITHUB_OUTPUT"
           echo "win_version=$WIN_VER" >> "$GITHUB_OUTPUT"
 
-          if [ -z "$VERSION" ]; then echo "No version detected"; exit 0; fi
+          if [ -z "$VERSION" ]; then
+            echo "::error::No upstream version detected."
+            exit 1
+          fi
+
+          TAG="v${VERSION}"
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "::error::Tag ${TAG} already exists."
+            exit 1
+          fi
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::Release ${TAG} already exists."
+            exit 1
+          fi
 
           RESULT_JSON="$RESULT" node <<'NODE'
           const fs = require('fs');
@@ -240,26 +318,26 @@ jobs:
           fs.writeFileSync('scripts/.versions.json', JSON.stringify(versions, null, 2) + '\n');
           NODE
 
-          node -e "
-            const fs=require('fs'), p=JSON.parse(fs.readFileSync('package.json','utf8'));
-            p.version='$VERSION';
-            fs.writeFileSync('package.json', JSON.stringify(p,null,2)+'\n');
-          "
+          VERSION="$VERSION" BUILD_NUMBER="$MAC_ARM64_BUILD" node <<'NODE'
+          const { updateVersionFiles } = require('./scripts/bump-version');
+          updateVersionFiles({
+            version: process.env.VERSION,
+            buildNumber: process.env.BUILD_NUMBER,
+          });
+          NODE
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          git add package.json scripts/.versions.json
-          git diff --cached --quiet && echo "No version change" && exit 0
+          git add package.json package-lock.json scripts/.versions.json
+          if git diff --cached --quiet; then
+            echo "::error::Version metadata did not change."
+            exit 1
+          fi
 
           git commit -m "Bump version to ${VERSION}"
           git tag -a "v${VERSION}" -m "Codex ${VERSION}"
           git push origin HEAD --tags
-
-      - name: Download all artifacts
-        uses: actions/download-artifact@v7
-        with:
-          path: artifacts
 
       - name: Display structure
         run: ls -lhR artifacts/

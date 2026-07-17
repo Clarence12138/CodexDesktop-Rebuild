@@ -9,6 +9,7 @@ const {
   copyRecursive,
   getVersion,
   patchExeHash,
+  verifyPeX64,
 } = require("./build-common");
 
 function buildWin({ outDir, projectRoot, srcDir }) {
@@ -33,10 +34,13 @@ function buildWin({ outDir, projectRoot, srcDir }) {
   const newHash = computeAsarHeaderHash(asarPath);
   const executablePath = path.join(outputApp, "Codex.exe");
   if (!fs.existsSync(executablePath)) throw new Error(`Missing ${executablePath}`);
+  verifyPeX64(executablePath);
   if (oldHash !== newHash) patchExeHash(executablePath, oldHash, newHash);
 
   const codexPath = path.join(resourcesDir, "codex.exe");
   if (!fs.existsSync(codexPath)) throw new Error(`Missing ${codexPath}`);
+  verifyPeX64(codexPath);
+  console.log("   [verify] Codex.exe and codex.exe are x64 PE binaries");
   console.log("   [codex] preserved upstream binary");
 
   const version = getVersion(asarDir);
@@ -47,6 +51,7 @@ function buildWin({ outDir, projectRoot, srcDir }) {
     stdio: "inherit",
   });
   if (!fs.existsSync(archivePath)) throw new Error(`ZIP was not created: ${archivePath}`);
+  execFileSync("7zz", ["t", archivePath], { stdio: "inherit" });
   console.log(`   [ok] ${archivePath} (${(fs.statSync(archivePath).size / 1048576).toFixed(1)} MB)`);
   return archivePath;
 }

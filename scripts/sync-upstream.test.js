@@ -10,6 +10,7 @@ const {
   removeCacheEntries,
   validateMacMetadata,
 } = require("./sync-upstream-lib");
+const { selectPackageForArchitecture } = require("./fetch-msstore");
 
 test("parseArgs accepts a local macOS app and rejects conflicting flags", () => {
   const options = parseArgs(["--force", "--skip-win", "--local-mac-app", "/Applications/Codex.app"]);
@@ -64,4 +65,21 @@ test("--force cache removal deletes archives and extraction directories", () => 
   assert.equal(fs.existsSync(archive), false);
   assert.equal(fs.existsSync(extract), false);
   fs.rmSync(root, { recursive: true, force: true });
+});
+
+test("Microsoft Store package selection requires the requested architecture", () => {
+  const packages = [
+    { name: "OpenAI.Codex_26.715.2305.0_arm64__publisher.msix" },
+    { name: "OpenAI.Codex_26.715.2305.0_x64__publisher.msix" },
+  ];
+
+  assert.equal(selectPackageForArchitecture(packages, "x64"), packages[1]);
+  assert.throws(
+    () => selectPackageForArchitecture(packages, "x86"),
+    /Unsupported Microsoft Store architecture/,
+  );
+  assert.throws(
+    () => selectPackageForArchitecture(packages.slice(0, 1), "x64"),
+    /Expected exactly one x64 Microsoft Store package/,
+  );
 });
