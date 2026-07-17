@@ -4,6 +4,11 @@ const { execFileSync } = require("child_process");
 const asar = require("@electron/asar");
 
 const MAC_VARIANTS = Object.freeze({ arm64: "mac-arm64", x86_64: "mac-x64" });
+const MACHO_MAGIC_64 = 0xfeedfacf;
+const MACHO_CPU_TYPES = Object.freeze({
+  0x0100000c: "arm64",
+  0x01000007: "x86_64",
+});
 
 function parseArgs(argv) {
   const options = {
@@ -106,12 +111,49 @@ function readPlistValue(plistPath, key) {
   return execFileSync("plutil", ["-extract", key, "raw", plistPath], { encoding: "utf8" }).trim();
 }
 
+function readPlistMetadata(plistPath, platform) {
+  const keys = ["CFBundleExecutable", "CFBundleIdentifier", "CFBundleShortVersionString", "CFBundleVersion"];
+  if (platform === "darwin") {
+    return Object.fromEntries(keys.map((key) => [key, readPlistValue(plistPath, key)]));
+  }
+  if (platform !== "linux") throw new Error(`Unsupported macOS bundle validation platform: ${platform}`);
+  const script = [
+    "import json, plistlib, sys",
+    "with open(sys.argv[1], 'rb') as source:",
+    "    plist = plistlib.load(source)",
+    `keys = ${JSON.stringify(keys)}`,
+    "print(json.dumps({key: str(plist.get(key, '')) for key in keys}))",
+  ].join("\n");
+  return JSON.parse(execFileSync("python3", ["-c", script, plistPath], { encoding: "utf8" }));
+}
+
 function parseArchitectures(output) {
   const architectures = output.trim().split(/\s+/).filter(Boolean);
   const unsupported = architectures.filter((arch) => !MAC_VARIANTS[arch]);
   if (unsupported.length > 0) throw new Error(`Unsupported macOS architecture: ${unsupported.join(", ")}`);
   if (architectures.length === 0) throw new Error("No architecture found in macOS executable");
   return [...new Set(architectures)];
+}
+
+function parseMachOArchitectures(header) {
+  if (header.length < 8 || header.readUInt32LE(0) !== MACHO_MAGIC_64) {
+    throw new Error("Executable is not a supported 64-bit Mach-O binary");
+  }
+  const cpuType = header.readUInt32LE(4);
+  const architecture = MACHO_CPU_TYPES[cpuType];
+  if (!architecture) throw new Error(`Unsupported Mach-O CPU type: 0x${cpuType.toString(16)}`);
+  return [architecture];
+}
+
+function readMachOArchitectures(executablePath) {
+  const handle = fs.openSync(executablePath, "r");
+  try {
+    const header = Buffer.alloc(8);
+    const bytesRead = fs.readSync(handle, header, 0, header.length, 0);
+    return parseMachOArchitectures(header.subarray(0, bytesRead));
+  } finally {
+    fs.closeSync(handle);
+  }
 }
 
 function validateMacMetadata(metadata, expected = {}) {
@@ -136,28 +178,28 @@ function validateMacMetadata(metadata, expected = {}) {
   return metadata;
 }
 
-function inspectMacApp(appPath, expected = {}) {
-  if (process.platform !== "darwin") throw new Error("macOS app validation requires macOS");
+function inspectMacApp(appPath, expected = {}, platform = process.platform) {
   const resolvedApp = findMacApp(appPath);
   const contentsDir = path.join(resolvedApp, "Contents");
   const plistPath = path.join(contentsDir, "Info.plist");
   const asarPath = path.join(contentsDir, "Resources", "app.asar");
   if (!fs.existsSync(plistPath)) throw new Error(`${resolvedApp}: Info.plist not found`);
 
-  const executable = readPlistValue(plistPath, "CFBundleExecutable");
+  const plist = readPlistMetadata(plistPath, platform);
+  const executable = plist.CFBundleExecutable;
   const executablePath = path.join(contentsDir, "MacOS", executable);
   if (!fs.existsSync(executablePath)) throw new Error(`${resolvedApp}: executable not found: ${executable}`);
-  const architectures = parseArchitectures(
-    execFileSync("lipo", ["-archs", executablePath], { encoding: "utf8" }),
-  );
+  const architectures = platform === "darwin"
+    ? parseArchitectures(execFileSync("lipo", ["-archs", executablePath], { encoding: "utf8" }))
+    : readMachOArchitectures(executablePath);
   const packageJson = JSON.parse(asar.extractFile(asarPath, "package.json").toString("utf8"));
   const metadata = {
     appPath: resolvedApp,
     resourcesDir: path.dirname(asarPath),
     executable,
-    bundleIdentifier: readPlistValue(plistPath, "CFBundleIdentifier"),
-    version: readPlistValue(plistPath, "CFBundleShortVersionString"),
-    build: readPlistValue(plistPath, "CFBundleVersion"),
+    bundleIdentifier: plist.CFBundleIdentifier,
+    version: plist.CFBundleShortVersionString,
+    build: plist.CFBundleVersion,
     asarVersion: packageJson.version,
     variants: architectures.map((arch) => MAC_VARIANTS[arch]),
   };
@@ -172,6 +214,7 @@ module.exports = {
   inspectMacApp,
   parseArchitectures,
   parseArgs,
+  parseMachOArchitectures,
   removeCacheEntries,
   validateMacMetadata,
 };
