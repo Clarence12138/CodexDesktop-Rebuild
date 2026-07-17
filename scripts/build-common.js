@@ -1,6 +1,17 @@
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
+const { execFileSync } = require("child_process");
+
+function packAsar({ source, destination, cwd }) {
+  const asarLibrary = require.resolve("@electron/asar");
+  const asarCli = path.resolve(path.dirname(asarLibrary), "..", "bin", "asar.mjs");
+  if (!fs.existsSync(asarCli)) throw new Error(`ASAR CLI not found: ${asarCli}`);
+  execFileSync(process.execPath, [asarCli, "pack", source, destination], {
+    cwd,
+    stdio: "inherit",
+  });
+}
 
 function clearDir(dir) {
   fs.rmSync(dir, { force: true, recursive: true });
@@ -112,6 +123,7 @@ module.exports = {
   copyRecursive,
   findAppBundle,
   getVersion,
+  packAsar,
   patchExeHash,
   readPeMachine,
   verifyPeX64,

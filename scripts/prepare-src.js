@@ -15,7 +15,8 @@
  */
 const fs = require("fs");
 const path = require("path");
-const { execFileSync, execSync } = require("child_process");
+const { execFileSync } = require("child_process");
+const { packAsar } = require("./build-common");
 
 const SRC = path.join(__dirname, "..", "src");
 const PROJECT_ROOT = path.join(__dirname, "..");
@@ -180,7 +181,7 @@ function main() {
   // 1. Repack _asar/ -> app.asar
   const repackedAsar = path.join(sourceDir, "app.asar");
   console.log("   [repack] _asar/ -> app.asar");
-  execSync(`npx asar pack "${asarContentDir}" "${repackedAsar}"`);
+  packAsar({ source: asarContentDir, destination: repackedAsar, cwd: PROJECT_ROOT });
   const asarSize = (fs.statSync(repackedAsar).size / 1048576).toFixed(1);
   console.log(`   [ok] app.asar: ${asarSize} MB`);
 
