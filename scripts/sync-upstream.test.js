@@ -8,6 +8,7 @@ const {
   getZipExtractor,
   parseArchitectures,
   parseArgs,
+  parseMachOArchitectures,
   removeCacheEntries,
   validateMacMetadata,
 } = require("./sync-upstream-lib");
@@ -65,6 +66,18 @@ test("metadata validation enforces version, build, ASAR version, and architectur
   assert.throws(() => validateMacMetadata({ ...metadata, asarVersion: "0.0.0" }), /Version mismatch/);
   assert.throws(() => validateMacMetadata(metadata, { variant: "mac-x64" }), /Architecture mismatch/);
   assert.deepEqual(parseArchitectures("arm64 x86_64\n"), ["arm64", "x86_64"]);
+});
+
+test("Mach-O validation identifies supported thin architectures", () => {
+  const header = Buffer.alloc(8);
+  header.writeUInt32LE(0xfeedfacf, 0);
+  header.writeUInt32LE(0x0100000c, 4);
+  assert.deepEqual(parseMachOArchitectures(header), ["arm64"]);
+
+  header.writeUInt32LE(0x01000007, 4);
+  assert.deepEqual(parseMachOArchitectures(header), ["x86_64"]);
+  header.writeUInt32LE(0x00000007, 4);
+  assert.throws(() => parseMachOArchitectures(header), /Unsupported Mach-O CPU type/);
 });
 
 test("--force cache removal deletes archives and extraction directories", () => {
