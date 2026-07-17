@@ -8,6 +8,7 @@ const {
   computeAsarHeaderHash,
   findAppBundle,
   getVersion,
+  packAsar,
 } = require("./build-common");
 
 const INTEGRITY_HASH_KEY = "ElectronAsarIntegrity.Resources/app\\.asar.hash";
@@ -98,7 +99,7 @@ function buildMac({ outDir, platform, projectRoot, srcDir }) {
 
   const resourcesDir = path.join(outputApp, "Contents", "Resources");
   const asarPath = path.join(resourcesDir, "app.asar");
-  exec("npx", ["asar", "pack", asarDir, asarPath], { cwd: projectRoot, stdio: "inherit" });
+  packAsar({ source: asarDir, destination: asarPath, cwd: projectRoot });
   const infoPlist = path.join(outputApp, "Contents", "Info.plist");
   updateBundleMetadata(infoPlist, asarPath);
 

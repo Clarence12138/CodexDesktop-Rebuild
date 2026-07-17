@@ -3,8 +3,14 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
+const asar = require("@electron/asar");
 
-const { findAppBundle, readPeMachine, verifyPeX64 } = require("../scripts/build-common");
+const {
+  findAppBundle,
+  packAsar,
+  readPeMachine,
+  verifyPeX64,
+} = require("../scripts/build-common");
 const { parsePlatform } = require("../scripts/build-from-upstream");
 const { resolveLinuxMain } = require("../scripts/prepare-src");
 const { parseArgs, selectedPlatforms, syncArgs } = require("../scripts/rebuild");
@@ -13,12 +19,24 @@ const buildMacSource = fs.readFileSync(
   path.join(__dirname, "../scripts/build-mac.js"),
   "utf8",
 );
+const buildCommonSource = fs.readFileSync(
+  path.join(__dirname, "../scripts/build-common.js"),
+  "utf8",
+);
 const buildWinSource = fs.readFileSync(
   path.join(__dirname, "../scripts/build-win.js"),
   "utf8",
 );
 const rebuildSource = fs.readFileSync(
   path.join(__dirname, "../scripts/rebuild.js"),
+  "utf8",
+);
+const manualWorkflowSource = fs.readFileSync(
+  path.join(__dirname, "../.github/workflows/build.yml"),
+  "utf8",
+);
+const releaseWorkflowSource = fs.readFileSync(
+  path.join(__dirname, "../.github/workflows/sync.yml"),
   "utf8",
 );
 
@@ -67,6 +85,30 @@ test("native desktop builds preserve the upstream Codex core", () => {
   assert.doesNotMatch(buildWinSource, /replaceCodex/);
   assert.match(buildMacSource, /preserved upstream binary/);
   assert.match(buildWinSource, /preserved upstream binary/);
+});
+
+test("native ASAR packing invokes the locked CLI through Node", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-asar-pack-"));
+  t.after(() => fs.rmSync(root, { force: true, recursive: true }));
+  const source = path.join(root, "source");
+  const destination = path.join(root, "fixture.asar");
+  fs.mkdirSync(path.join(source, "nested"), { recursive: true });
+  fs.writeFileSync(path.join(source, "nested", "fixture.txt"), "packed by locked CLI");
+
+  packAsar({ source, destination, cwd: root });
+
+  assert.equal(
+    asar.extractFile(destination, "nested/fixture.txt").toString("utf8"),
+    "packed by locked CLI",
+  );
+  assert.doesNotMatch(buildMacSource, /exec\("npx", \["asar"/);
+  assert.doesNotMatch(buildWinSource, /execFileSync\("npx", \["asar"/);
+  assert.match(buildCommonSource, /execFileSync\(process\.execPath/);
+});
+
+test("Linux workflows preserve bundled cross-architecture binaries in RPMs", () => {
+  assert.match(manualWorkflowSource, /%__strip \/bin\/true/);
+  assert.match(releaseWorkflowSource, /%__strip \/bin\/true/);
 });
 
 test("rebuild requires strict applied-patch verification before packaging", () => {

@@ -8,6 +8,7 @@ const {
   computeAsarHeaderHash,
   copyRecursive,
   getVersion,
+  packAsar,
   patchExeHash,
   verifyPeX64,
 } = require("./build-common");
@@ -27,10 +28,7 @@ function buildWin({ outDir, projectRoot, srcDir }) {
   const resourcesDir = path.join(outputApp, "resources");
   const asarPath = path.join(resourcesDir, "app.asar");
   const oldHash = computeAsarHeaderHash(asarPath);
-  execFileSync("npx", ["asar", "pack", asarDir, asarPath], {
-    cwd: projectRoot,
-    stdio: "inherit",
-  });
+  packAsar({ source: asarDir, destination: asarPath, cwd: projectRoot });
   const newHash = computeAsarHeaderHash(asarPath);
   const executablePath = path.join(outputApp, "Codex.exe");
   if (!fs.existsSync(executablePath)) throw new Error(`Missing ${executablePath}`);
