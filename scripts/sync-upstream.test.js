@@ -5,6 +5,7 @@ const path = require("node:path");
 const test = require("node:test");
 const {
   findMacApp,
+  getZipExtractor,
   parseArchitectures,
   parseArgs,
   removeCacheEntries,
@@ -13,10 +14,11 @@ const {
 const { selectPackageForArchitecture } = require("./fetch-msstore");
 
 test("parseArgs accepts a local macOS app and rejects conflicting flags", () => {
-  const options = parseArgs(["--force", "--skip-win", "--local-mac-app", "/Applications/Codex.app"]);
+  const localMacApp = "/Applications/Codex.app";
+  const options = parseArgs(["--force", "--skip-win", "--local-mac-app", localMacApp]);
   assert.equal(options.force, true);
   assert.equal(options.skipWin, true);
-  assert.equal(options.localMacApp, "/Applications/Codex.app");
+  assert.equal(options.localMacApp, path.resolve(localMacApp));
   assert.equal(options.macPlatform, null);
   assert.throws(() => parseArgs(["--skip-mac", "--local-mac-app", "/tmp/App.app"]), /cannot be combined/);
   assert.throws(() => parseArgs(["--local-mac-app"]), /requires a path/);
@@ -27,6 +29,18 @@ test("parseArgs restricts sync to one macOS platform", () => {
   assert.equal(options.macPlatform, "mac-x64");
   assert.throws(() => parseArgs(["--mac-platform", "linux-x64"]), /must be/);
   assert.throws(() => parseArgs(["--skip-mac", "--mac-platform", "mac-x64"]), /cannot be combined/);
+});
+
+test("ZIP extraction uses platform-native tools", () => {
+  assert.deepEqual(getZipExtractor("Codex.zip", "/tmp/out", "darwin"), {
+    binary: "ditto",
+    args: ["-xk", "Codex.zip", "/tmp/out"],
+  });
+  assert.deepEqual(getZipExtractor("Codex.zip", "/tmp/out", "linux"), {
+    binary: "unzip",
+    args: ["-q", "Codex.zip", "-d", "/tmp/out"],
+  });
+  assert.equal(getZipExtractor("Codex.msix", "/tmp/out", "win32"), null);
 });
 
 test("findMacApp locates an arbitrarily named app containing app.asar", () => {
