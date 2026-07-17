@@ -57,6 +57,17 @@ function removeCacheEntries(paths, force) {
   for (const entry of paths) fs.rmSync(entry, { recursive: true, force: true });
 }
 
+function getZipExtractor(archive, destination, platform = process.platform) {
+  if (!archive.endsWith(".zip")) return null;
+  if (platform === "darwin") {
+    return { binary: "ditto", args: ["-xk", archive, destination] };
+  }
+  if (platform === "linux") {
+    return { binary: "unzip", args: ["-q", archive, "-d", destination] };
+  }
+  return null;
+}
+
 function findFile(dir, name) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     const fullPath = path.join(dir, entry.name);
@@ -157,6 +168,7 @@ module.exports = {
   clearDir,
   findFile,
   findMacApp,
+  getZipExtractor,
   inspectMacApp,
   parseArchitectures,
   parseArgs,

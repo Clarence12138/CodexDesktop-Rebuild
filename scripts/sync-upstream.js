@@ -19,6 +19,7 @@ const asar = require("@electron/asar");
 const {
   clearDir,
   findFile,
+  getZipExtractor,
   inspectMacApp,
   parseArgs,
   removeCacheEntries,
@@ -82,8 +83,9 @@ function download(url, destination, label) {
 
 function extractArchive(archive, destination) {
   clearDir(destination);
-  if (process.platform === "darwin" && archive.endsWith(".zip")) {
-    execFileSync("ditto", ["-xk", archive, destination], { stdio: "inherit" });
+  const zipExtractor = getZipExtractor(archive, destination);
+  if (zipExtractor) {
+    execFileSync(zipExtractor.binary, zipExtractor.args, { stdio: "inherit" });
     return;
   }
   for (const binary of ["7zz", "7z"]) {
