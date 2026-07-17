@@ -9,7 +9,7 @@ const {
   copyRecursive,
   getVersion,
   packAsar,
-  patchExeHash,
+  updateWindowsAsarIntegrity,
   verifyPeX64,
 } = require("./build-common");
 
@@ -33,7 +33,7 @@ function buildWin({ outDir, projectRoot, srcDir }) {
   const executablePath = path.join(outputApp, "Codex.exe");
   if (!fs.existsSync(executablePath)) throw new Error(`Missing ${executablePath}`);
   verifyPeX64(executablePath);
-  if (oldHash !== newHash) patchExeHash(executablePath, oldHash, newHash);
+  updateWindowsAsarIntegrity({ executablePath, resourcesDir, oldHash, newHash });
 
   const codexPath = path.join(resourcesDir, "codex.exe");
   if (!fs.existsSync(codexPath)) throw new Error(`Missing ${codexPath}`);
