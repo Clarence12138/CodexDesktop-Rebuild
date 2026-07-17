@@ -65,6 +65,25 @@ const PLATFORM_SUFFIXES = Object.freeze({
     "mac-arm64": "darwin-arm64", "mac-x64": "darwin-x64", win: "win32-x64",
 });
 
+function resolveLinuxMain({ upstreamMain, srcDir = SRC }) {
+  if (typeof upstreamMain !== "string" || !upstreamMain.trim()) {
+    throw new Error("Upstream package.json has no main entry");
+  }
+  const normalized = path.posix.normalize(upstreamMain);
+  if (path.posix.isAbsolute(normalized) || normalized === ".." || normalized.startsWith("../")) {
+    throw new Error(`Unsafe upstream main entry: ${upstreamMain}`);
+  }
+  const sourceEntry = path.resolve(srcDir, ...normalized.split("/"));
+  const relativeEntry = path.relative(srcDir, sourceEntry);
+  if (relativeEntry === ".." || relativeEntry.startsWith(`..${path.sep}`) || path.isAbsolute(relativeEntry)) {
+    throw new Error(`Upstream main entry escapes src/: ${upstreamMain}`);
+  }
+  if (!fs.existsSync(sourceEntry) || !fs.statSync(sourceEntry).isFile()) {
+    throw new Error(`Upstream main entry not found: ${sourceEntry}`);
+  }
+  return path.posix.join("src", normalized);
+}
+
 function downloadVendorRoot(platform, triple) {
   const suffix = PLATFORM_SUFFIXES[platform];
   if (!suffix) throw new Error(`No @cometix/codex package suffix for ${platform}`);
@@ -216,7 +235,9 @@ function main() {
     const rootPkg = JSON.parse(fs.readFileSync(rootPkgPath, "utf-8"));
     const oldVer = rootPkg.version;
     rootPkg.version = upstream.version || rootPkg.version;
-    rootPkg.main = "src/.vite/build/bootstrap.js";
+    rootPkg.main = isLinux
+      ? resolveLinuxMain({ upstreamMain: upstream.main })
+      : "src/.vite/build/bootstrap.js";
     for (const key of [
       "codexBuildNumber", "codexBuildFlavor",
       "codexSparkleFeedUrl", "codexSparklePublicKey",
@@ -250,4 +271,6 @@ function main() {
   console.log(`   [ok] src/ ready for ${platform} build`);
 }
 
-main();
+if (require.main === module) main();
+
+module.exports = { resolveLinuxMain };

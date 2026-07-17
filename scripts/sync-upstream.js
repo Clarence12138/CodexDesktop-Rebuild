@@ -18,6 +18,7 @@ const { execFileSync } = require("child_process");
 const asar = require("@electron/asar");
 const {
   clearDir,
+  decodeUriEncodedTree,
   findFile,
   getZipExtractor,
   inspectMacApp,
@@ -209,6 +210,8 @@ async function syncWindows(info, options) {
   if (!fs.existsSync(archive)) download(info.url, archive, "Windows MSIX");
   else console.log(`   [cache] ${archive}`);
   extractArchive(archive, extractDir);
+  const decodedEntries = decodeUriEncodedTree(extractDir);
+  console.log(`   [decode] ${decodedEntries} URI-encoded MSIX paths`);
   const resourcesDir = path.join(extractDir, "app", "resources");
   if (!fs.existsSync(resourcesDir)) {
     const asarPath = findFile(extractDir, "app.asar");
