@@ -117,6 +117,10 @@ module.exports = {
       // Skip _asar (already repacked into app.asar or packed by forge for Linux).
       // For Linux: also skip macOS-only binaries and app.asar (forge packs its own).
       const skip = new Set(["_asar"]);
+      if (platform === "win32") {
+        skip.add("owl-app.ini");
+        skip.add("owl-electron-app.json");
+      }
       const MACOS_ONLY_FILES = new Set([
         "node", "node_repl",
         "electron.icns", "Assets.car",

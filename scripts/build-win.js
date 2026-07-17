@@ -1,39 +1,38 @@
 const fs = require("fs");
-const os = require("os");
 const path = require("path");
 const { execFileSync } = require("child_process");
 
 const {
   clearDir,
-  computeAsarHeaderHash,
-  copyRecursive,
   getVersion,
-  packAsar,
-  updateWindowsAsarIntegrity,
   verifyPeX64,
 } = require("./build-common");
+
+function packageWithElectronForge({ outDir, projectRoot }) {
+  const forgeCli = require.resolve("@electron-forge/cli/dist/electron-forge.js");
+  clearDir(outDir);
+  execFileSync(process.execPath, [forgeCli, "package", "--platform=win32", "--arch=x64"], {
+    cwd: projectRoot,
+    stdio: "inherit",
+  });
+  return path.join(outDir, "Codex-win32-x64");
+}
 
 function buildWin({ outDir, projectRoot, srcDir }) {
   const asarDir = path.join(srcDir, "win", "_asar");
   if (!fs.existsSync(asarDir)) throw new Error("win/_asar is missing; run sync first");
 
-  const sourceDir = path.join(os.tmpdir(), "codex-sync", "win-extract", "app");
-  if (!fs.existsSync(sourceDir)) throw new Error(`Windows source is missing: ${sourceDir}`);
-
-  const outputRoot = path.join(outDir, "win");
-  const outputApp = path.join(outputRoot, "Codex-win32-x64");
-  clearDir(outputRoot);
-  copyRecursive(sourceDir, outputApp);
-
+  const outputApp = packageWithElectronForge({ outDir, projectRoot });
   const resourcesDir = path.join(outputApp, "resources");
-  const asarPath = path.join(resourcesDir, "app.asar");
-  const oldHash = computeAsarHeaderHash(asarPath);
-  packAsar({ source: asarDir, destination: asarPath, cwd: projectRoot });
-  const newHash = computeAsarHeaderHash(asarPath);
   const executablePath = path.join(outputApp, "Codex.exe");
-  if (!fs.existsSync(executablePath)) throw new Error(`Missing ${executablePath}`);
+  const asarPath = path.join(resourcesDir, "app.asar");
+  for (const requiredPath of [executablePath, asarPath]) {
+    if (!fs.existsSync(requiredPath)) throw new Error(`Missing ${requiredPath}`);
+  }
   verifyPeX64(executablePath);
-  updateWindowsAsarIntegrity({ executablePath, resourcesDir, oldHash, newHash });
+  if (fs.existsSync(path.join(resourcesDir, "owl-electron-app.json"))) {
+    throw new Error("Standard Electron package still contains Owl runtime metadata");
+  }
 
   const codexPath = path.join(resourcesDir, "codex.exe");
   if (!fs.existsSync(codexPath)) throw new Error(`Missing ${codexPath}`);

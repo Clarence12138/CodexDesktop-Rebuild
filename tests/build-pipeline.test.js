@@ -9,7 +9,6 @@ const {
   findAppBundle,
   packAsar,
   readPeMachine,
-  updateWindowsAsarIntegrity,
   verifyPeX64,
 } = require("../scripts/build-common");
 const { parsePlatform } = require("../scripts/build-from-upstream");
@@ -90,6 +89,8 @@ test("native desktop builds preserve the upstream Codex core", () => {
   assert.doesNotMatch(buildWinSource, /replaceCodex/);
   assert.match(buildMacSource, /preserved upstream binary/);
   assert.match(buildWinSource, /preserved upstream binary/);
+  assert.match(buildWinSource, /electron-forge\/cli\/dist\/electron-forge\.js/);
+  assert.doesNotMatch(buildWinSource, /win-extract/);
 });
 
 test("native ASAR packing invokes the locked CLI through Node", (t) => {
@@ -145,72 +146,6 @@ test("Windows artifact validation rejects non-x64 PE binaries", (t) => {
   buffer.writeUInt16LE(0xaa64, 68);
   fs.writeFileSync(binary, buffer);
   assert.throws(() => verifyPeX64(binary), /is not x64 PE/);
-});
-
-test("Windows ASAR integrity explicitly supports the Owl runtime", (t) => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-owl-integrity-"));
-  t.after(() => fs.rmSync(root, { force: true, recursive: true }));
-  const resourcesDir = path.join(root, "resources");
-  const executablePath = path.join(root, "Codex.exe");
-  fs.mkdirSync(resourcesDir);
-  fs.writeFileSync(executablePath, "owl runtime without Electron fuses");
-  fs.writeFileSync(
-    path.join(resourcesDir, "owl-electron-app.json"),
-    JSON.stringify({ runtimeName: "owl" }),
-  );
-
-  assert.equal(
-    updateWindowsAsarIntegrity({
-      executablePath,
-      resourcesDir,
-      oldHash: "a".repeat(64),
-      newHash: "b".repeat(64),
-    }),
-    "owl",
-  );
-});
-
-test("Windows ASAR integrity updates an embedded Electron hash", (t) => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-electron-integrity-"));
-  t.after(() => fs.rmSync(root, { force: true, recursive: true }));
-  const executablePath = path.join(root, "Codex.exe");
-  const oldHash = "a".repeat(64);
-  const newHash = "b".repeat(64);
-  fs.writeFileSync(executablePath, `prefix${oldHash}suffix`);
-
-  assert.equal(
-    updateWindowsAsarIntegrity({
-      executablePath,
-      resourcesDir: path.join(root, "resources"),
-      oldHash,
-      newHash,
-    }),
-    "electron",
-  );
-  assert.match(fs.readFileSync(executablePath, "utf8"), new RegExp(newHash));
-});
-
-test("Windows ASAR integrity rejects unknown or ambiguous runtimes", (t) => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-runtime-integrity-"));
-  t.after(() => fs.rmSync(root, { force: true, recursive: true }));
-  const resourcesDir = path.join(root, "resources");
-  const executablePath = path.join(root, "Codex.exe");
-  fs.mkdirSync(resourcesDir);
-  fs.writeFileSync(executablePath, "unknown runtime");
-  const options = {
-    executablePath,
-    resourcesDir,
-    oldHash: "a".repeat(64),
-    newHash: "b".repeat(64),
-  };
-
-  assert.throws(() => updateWindowsAsarIntegrity(options), /runtime is not Owl/);
-  fs.writeFileSync(
-    path.join(resourcesDir, "owl-electron-app.json"),
-    JSON.stringify({ runtimeName: "owl" }),
-  );
-  fs.writeFileSync(executablePath, "dL7pKGdnNz796PbbjQWNKmHXBZaB9tsX");
-  assert.throws(() => updateWindowsAsarIntegrity(options), /Electron fuse wire/);
 });
 
 test("Linux build uses a validated upstream main entry", (t) => {
