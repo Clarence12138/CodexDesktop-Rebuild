@@ -1,4 +1,4 @@
-name: Sync Upstream & Patch
+name: Sync Upstream & Release macOS
 
 on:
   workflow_dispatch:
@@ -55,19 +55,16 @@ jobs:
           exit_code=$?
           set -e
 
-          if [ "${{ inputs.force }}" = "true" ]; then
+          if [ $exit_code -eq 0 ]; then
             echo "has_update=true" >> "$GITHUB_OUTPUT"
-          elif [ $exit_code -eq 0 ]; then
-            echo "has_update=true" >> "$GITHUB_OUTPUT"
-          else
+          elif [ $exit_code -eq 1 ] && [ "${{ inputs.force }}" != "true" ]; then
             echo "has_update=false" >> "$GITHUB_OUTPUT"
-            echo "No upstream update detected."
+            echo "No upstream macOS update detected."
+          else
+            echo "::error::macOS update check failed with exit code $exit_code."
+            exit "$exit_code"
           fi
 
-  # ──────────────────────────────────────────────
-  # Each platform: sync + patch + build in one job
-  # (src/ is gitignored, so it must be generated per-runner)
-  # ──────────────────────────────────────────────
   build-mac:
     needs: check
     if: needs.check.outputs.has_update == 'true'
@@ -87,20 +84,21 @@ jobs:
           cache: npm
 
       - name: Install dependencies
-        run: |
-          npm ci
+        run: npm ci
 
-      - name: Install tools
-        run: |
-          brew install --quiet sevenzip
+      - name: Run tests
+        run: npm test
 
-      - name: Sync upstream (macOS only)
-        run: node scripts/sync-upstream.js --force --skip-win
+      - name: Sync upstream macOS app
+        run: node scripts/sync-upstream.js --force --mac-platform mac-${{ matrix.arch }}
 
       - name: Patch
         run: node scripts/patch-all.js mac-${{ matrix.arch }}
 
-      - name: Build
+      - name: Verify patches
+        run: node scripts/patch-all.js mac-${{ matrix.arch }} --verify
+
+      - name: Build DMG
         run: npm run build:mac-${{ matrix.arch }}
 
       - name: Upload artifacts
@@ -110,120 +108,9 @@ jobs:
           path: out/*.dmg
           if-no-files-found: error
 
-  build-windows:
-    needs: check
-    if: needs.check.outputs.has_update == 'true'
-    runs-on: windows-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-
-      - name: Install dependencies
-        run: |
-          npm ci
-
-      - name: Run tests
-        run: npm test
-
-      - name: Install tools
-        run: |
-          choco install 7zip -y
-
-      - name: Add 7zz alias
-        run: |
-          Copy-Item "C:\Program Files\7-Zip\7z.exe" "C:\Program Files\7-Zip\7zz.exe"
-          echo "C:\Program Files\7-Zip" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
-
-      - name: Sync upstream (Windows only)
-        run: node scripts/sync-upstream.js --force --skip-mac
-
-      - name: Patch
-        run: node scripts/patch-all.js win
-
-      - name: Verify patches
-        run: node scripts/patch-all.js win --verify
-
-      - name: Build
-        run: npm run build:win-x64
-
-      - name: Smoke test packaged app
-        shell: pwsh
-        run: |
-          $process = Start-Process "out/win/Codex-win32-x64/Codex.exe" -ArgumentList "--disable-gpu" -PassThru
-          Start-Sleep -Seconds 15
-          if ($process.HasExited) {
-            throw "Packaged Codex.exe exited during smoke test with code $($process.ExitCode)"
-          }
-          Stop-Process -Id $process.Id -Force
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v7
-        with:
-          name: Codex-Windows-x64
-          path: out/*.zip
-          if-no-files-found: error
-
-  build-linux:
-    needs: check
-    if: needs.check.outputs.has_update == 'true'
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        arch: [x64, arm64]
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y rpm fakeroot dpkg 7zip unzip python3
-
-      - name: Install dependencies
-        run: |
-          npm ci
-
-      - name: Sync upstream (macOS ZIP for unix, skip Windows)
-        run: node scripts/sync-upstream.js --force --skip-win
-
-      - name: Patch
-        run: node scripts/patch-all.js mac-${{ matrix.arch }}
-
-      - name: Configure RPM packaging
-        run: printf '%s\n' '%__strip /bin/true' > "$HOME/.rpmmacros"
-
-      - name: Build
-        run: npm run build:linux-${{ matrix.arch }}
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v7
-        with:
-          name: Codex-Linux-${{ matrix.arch }}
-          path: |
-            out/make/deb/**/*.deb
-            out/make/rpm/**/*.rpm
-            out/make/zip/**/*.zip
-          if-no-files-found: error
-
-  # ──────────────────────────────────────────────
-  # Bump version + tag + release
-  # ──────────────────────────────────────────────
   release:
-    needs: [build-mac, build-windows, build-linux]
-    if: needs.build-mac.result == 'success' && needs.build-windows.result == 'success' && needs.build-linux.result == 'success'
+    needs: build-mac
+    if: needs.build-mac.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -247,6 +134,7 @@ jobs:
           path: artifacts
 
       - name: Validate release artifacts
+        id: artifacts
         shell: bash
         run: |
           set -euo pipefail
@@ -265,13 +153,23 @@ jobs:
 
           require_one artifacts/Codex-macOS-x64 '*.dmg' 'macOS x64 DMG'
           require_one artifacts/Codex-macOS-arm64 '*.dmg' 'macOS arm64 DMG'
-          require_one artifacts/Codex-Windows-x64 '*.zip' 'Windows x64 ZIP'
-          require_one artifacts/Codex-Linux-x64 '*.deb' 'Linux x64 DEB'
-          require_one artifacts/Codex-Linux-x64 '*.rpm' 'Linux x64 RPM'
-          require_one artifacts/Codex-Linux-x64 '*.zip' 'Linux x64 ZIP'
-          require_one artifacts/Codex-Linux-arm64 '*.deb' 'Linux arm64 DEB'
-          require_one artifacts/Codex-Linux-arm64 '*.rpm' 'Linux arm64 RPM'
-          require_one artifacts/Codex-Linux-arm64 '*.zip' 'Linux arm64 ZIP'
+
+          ARM64_DMG="$(find artifacts/Codex-macOS-arm64 -type f -name '*.dmg')"
+          X64_DMG="$(find artifacts/Codex-macOS-x64 -type f -name '*.dmg')"
+          ARM64_NAME="$(basename "$ARM64_DMG")"
+          X64_NAME="$(basename "$X64_DMG")"
+          if [[ ! "$ARM64_NAME" =~ ^Codex-mac-arm64-([0-9.]+)\.dmg$ ]]; then
+            echo "::error::Invalid macOS arm64 artifact name: $ARM64_NAME"
+            exit 1
+          fi
+          ARM64_VERSION="${BASH_REMATCH[1]}"
+          if [[ ! "$X64_NAME" =~ ^Codex-mac-x64-([0-9.]+)\.dmg$ ]]; then
+            echo "::error::Invalid macOS x64 artifact name: $X64_NAME"
+            exit 1
+          fi
+          X64_VERSION="${BASH_REMATCH[1]}"
+          echo "arm64_version=$ARM64_VERSION" >> "$GITHUB_OUTPUT"
+          echo "x64_version=$X64_VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Get upstream version and tag
         id: version
@@ -283,20 +181,33 @@ jobs:
           MAC_ARM64=$(echo "$RESULT" | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{const j=JSON.parse(d);console.log(j.platforms?.['macOS-arm64']?.version||'')}catch{console.log('')}})")
           MAC_ARM64_BUILD=$(echo "$RESULT" | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{const j=JSON.parse(d);console.log(j.platforms?.['macOS-arm64']?.build||'')}catch{console.log('')}})")
           MAC_X64=$(echo "$RESULT" | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{const j=JSON.parse(d);console.log(j.platforms?.['macOS-x64']?.version||'')}catch{console.log('')}})")
-          WIN_VER=$(echo "$RESULT" | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{const j=JSON.parse(d);console.log(j.platforms?.Windows?.version||'')}catch{console.log('')}})")
 
-          VERSION="${MAC_ARM64:-${MAC_X64:-$WIN_VER}}"
+          ARTIFACT_ARM64="${{ steps.artifacts.outputs.arm64_version }}"
+          ARTIFACT_X64="${{ steps.artifacts.outputs.x64_version }}"
+          VERSION="$ARTIFACT_ARM64"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "mac_arm64=$MAC_ARM64" >> "$GITHUB_OUTPUT"
           echo "mac_x64=$MAC_X64" >> "$GITHUB_OUTPUT"
-          echo "win_version=$WIN_VER" >> "$GITHUB_OUTPUT"
 
-          if [ -z "$VERSION" ]; then
-            echo "::error::No upstream version detected."
+          if [ -z "$MAC_ARM64" ] || [ -z "$MAC_X64" ]; then
+            echo "::error::Both upstream macOS versions are required."
+            exit 1
+          fi
+          if [ "$ARTIFACT_ARM64" != "$MAC_ARM64" ] || [ "$ARTIFACT_X64" != "$MAC_X64" ]; then
+            echo "::error::macOS artifact/appcast mismatch: arm64=$ARTIFACT_ARM64/$MAC_ARM64 x64=$ARTIFACT_X64/$MAC_X64"
             exit 1
           fi
 
-          TAG="v${VERSION}"
+          if [ "$MAC_ARM64" = "$MAC_X64" ]; then
+            TAG="v${MAC_ARM64}"
+            RELEASE_NAME="Codex ${MAC_ARM64}"
+          else
+            TAG="macos-arm64-v${MAC_ARM64}-x64-v${MAC_X64}"
+            RELEASE_NAME="Codex macOS (arm64 ${MAC_ARM64}, x64 ${MAC_X64})"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "release_name=$RELEASE_NAME" >> "$GITHUB_OUTPUT"
+
           if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
             echo "::error::Tag ${TAG} already exists."
             exit 1
@@ -338,8 +249,8 @@ jobs:
             exit 1
           fi
 
-          git commit -m "Bump version to ${VERSION}"
-          git tag -a "v${VERSION}" -m "Codex ${VERSION}"
+          git commit -m "Update macOS releases to arm64 ${MAC_ARM64}, x64 ${MAC_X64}"
+          git tag -a "$TAG" -m "$RELEASE_NAME"
           git push origin HEAD --tags
 
       - name: Display structure
@@ -349,22 +260,15 @@ jobs:
         if: steps.version.outputs.version != ''
         uses: softprops/action-gh-release@v3
         with:
-          tag_name: v${{ steps.version.outputs.version }}
-          name: Codex ${{ steps.version.outputs.version }}
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: ${{ steps.version.outputs.release_name }}
           body: |
             ## Upstream Versions
             | Platform | Version |
             |----------|---------|
             | macOS arm64 | `${{ steps.version.outputs.mac_arm64 || 'N/A' }}` |
             | macOS x64 | `${{ steps.version.outputs.mac_x64 || 'N/A' }}` |
-            | Windows x64 | `${{ steps.version.outputs.win_version || 'N/A' }}` |
-            | Linux | uses macOS ASAR |
-          files: |
-            artifacts/**/*.dmg
-            artifacts/**/*.zip
-            artifacts/**/*.deb
-            artifacts/**/*.rpm
-            artifacts/**/*.exe
+          files: artifacts/**/*.dmg
           draft: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

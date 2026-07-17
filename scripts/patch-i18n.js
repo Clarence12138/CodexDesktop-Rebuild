@@ -10,14 +10,14 @@
  * Target files: any chunk containing "enable_i18n" (index-*.js, general-settings-*.js, app-main-*.js)
  *
  * Usage:
- *   node scripts/patch-i18n.js [platform]   # Apply (mac-arm64/mac-x64/win/omit=all)
+ *   node scripts/patch-i18n.js [platform]   # Apply to one or both macOS architectures
  *   node scripts/patch-i18n.js --check      # Dry-run
  *   node scripts/patch-i18n.js --verify     # Require applied state
  */
 const fs = require("fs");
 const path = require("path");
 const { parse } = require("acorn");
-const { locateBundles, relPath, SRC_DIR } = require("./patch-util");
+const { locateBundles, parsePatchArgs, relPath, SRC_DIR } = require("./patch-util");
 
 // ──────────────────────────────────────────────
 //  AST walker
@@ -118,7 +118,7 @@ function collectPatches(ast, source) {
 function locateTargets(platform) {
   const platforms = platform
     ? [platform]
-    : ["mac-arm64", "mac-x64", "win"].filter((p) =>
+    : ["mac-arm64", "mac-x64"].filter((p) =>
         fs.existsSync(path.join(SRC_DIR, p, "_asar", "webview", "assets"))
       );
 
@@ -154,10 +154,7 @@ function locateTargets(platform) {
 // ──────────────────────────────────────────────
 
 function main() {
-  const args = process.argv.slice(2);
-  const isCheck = args.includes("--check");
-  const isVerify = args.includes("--verify");
-  const platform = args.find((a) => ["mac-arm64", "mac-x64", "win"].includes(a));
+  const { isCheck, isVerify, platform } = parsePatchArgs(process.argv.slice(2));
 
   const targets = locateTargets(platform);
 

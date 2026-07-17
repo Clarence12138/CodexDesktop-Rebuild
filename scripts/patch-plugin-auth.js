@@ -3,7 +3,7 @@
 const fs = require("fs");
 const path = require("path");
 const { parse } = require("acorn");
-const { SRC_DIR, relPath } = require("./patch-util");
+const { parsePatchArgs, SRC_DIR, relPath } = require("./patch-util");
 const {
   REQUIRED_FEATURE_PATCH_IDS,
   findFeatureDefaultPatches,
@@ -19,7 +19,7 @@ const {
   findVerifiedRendererPatchIds,
 } = require("./patch-plugin-auth-renderer");
 
-const PLATFORMS = Object.freeze(["mac-arm64", "mac-x64", "win"]);
+const PLATFORMS = Object.freeze(["mac-arm64", "mac-x64"]);
 const FEATURE_CONTEXT_MARKERS = Object.freeze([
   "browser_use",
   "computer_use",
@@ -149,8 +149,7 @@ function processTarget(target, options) {
 }
 
 function main() {
-  const args = process.argv.slice(2);
-  const platform = args.find((arg) => PLATFORMS.includes(arg));
+  const { isCheck, isVerify, platform } = parsePatchArgs(process.argv.slice(2));
   const targets = locateTargets(platform);
   if (targets.length === 0) {
     console.error("[x] No plugin auth or browser-use targets found");
@@ -163,8 +162,8 @@ function main() {
     return true;
   });
   const options = {
-    isCheck: args.includes("--check"),
-    isVerify: args.includes("--verify"),
+    isCheck,
+    isVerify,
     satisfied: new Set(),
   };
   try {

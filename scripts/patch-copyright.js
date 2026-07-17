@@ -5,14 +5,14 @@
  * and replace the copyright string with a custom value.
  *
  * Usage:
- *   node scripts/patch-copyright.js [platform]   # Apply patch (unix/win/omit=both)
+ *   node scripts/patch-copyright.js [platform]   # Apply to one or both macOS architectures
  *   node scripts/patch-copyright.js --check       # Dry-run: report matches
  *   node scripts/patch-copyright.js --verify      # Require applied state
  */
 const fs = require("fs");
 const path = require("path");
 const { parse } = require("acorn");
-const { locateBundles, relPath } = require("./patch-util");
+const { locateBundles, parsePatchArgs, relPath } = require("./patch-util");
 
 // ──────────────────────────────────────────────
 //  Config
@@ -109,10 +109,7 @@ function collectPatches(ast, source) {
 // ──────────────────────────────────────────────
 
 function main() {
-  const args = process.argv.slice(2);
-  const isCheck = args.includes("--check");
-  const isVerify = args.includes("--verify");
-  const platform = args.find((a) => ["mac-arm64", "mac-x64", "win"].includes(a));
+  const { isCheck, isVerify, platform } = parsePatchArgs(process.argv.slice(2));
 
   const bundles = locateBundles({
     dir: "build",

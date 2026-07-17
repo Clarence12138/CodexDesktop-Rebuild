@@ -31,8 +31,8 @@ test("findUpstreamPkg selects the requested platform ASAR package", (t) => {
 test("findUpstreamPkg uses deterministic platform priority", (t) => {
   const srcDir = fs.mkdtempSync(path.join(os.tmpdir(), "bump-version-"));
   t.after(() => fs.rmSync(srcDir, { recursive: true, force: true }));
-  createPackage(srcDir, "win", "3.0.0");
-  const expected = createPackage(srcDir, "mac-x64", "2.0.0");
+  createPackage(srcDir, "mac-x64", "2.0.0");
+  const expected = createPackage(srcDir, "mac-arm64", "3.0.0");
 
   assert.equal(PLATFORM_PRIORITY[0], "mac-arm64");
   assert.equal(findUpstreamPkg({ srcDir }), expected);

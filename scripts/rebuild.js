@@ -36,7 +36,7 @@ function selectedPlatforms(platform) {
 }
 
 function syncArgs(options) {
-  const args = ["--skip-win"];
+  const args = [];
   if (options.platform && options.platform !== "mac") {
     args.push("--mac-platform", options.platform);
   }

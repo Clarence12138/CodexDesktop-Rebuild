@@ -14,8 +14,6 @@ function parseArgs(argv) {
   const options = {
     force: false,
     checkOnly: false,
-    skipMac: false,
-    skipWin: false,
     localMacApp: null,
     macPlatform: null,
   };
@@ -24,8 +22,6 @@ function parseArgs(argv) {
     const arg = argv[index];
     if (arg === "--force") options.force = true;
     else if (arg === "--check-only") options.checkOnly = true;
-    else if (arg === "--skip-mac") options.skipMac = true;
-    else if (arg === "--skip-win") options.skipWin = true;
     else if (arg === "--local-mac-app") {
       const value = argv[index + 1];
       if (!value || value.startsWith("--")) throw new Error("--local-mac-app requires a path");
@@ -43,12 +39,6 @@ function parseArgs(argv) {
     }
   }
 
-  if (options.skipMac && options.localMacApp) {
-    throw new Error("--local-mac-app cannot be combined with --skip-mac");
-  }
-  if (options.skipMac && options.macPlatform) {
-    throw new Error("--mac-platform cannot be combined with --skip-mac");
-  }
   return Object.freeze(options);
 }
 
@@ -69,50 +59,6 @@ function getZipExtractor(archive, destination, platform = process.platform) {
   }
   if (platform === "linux") {
     return { binary: "unzip", args: ["-q", archive, "-d", destination] };
-  }
-  return null;
-}
-
-function decodeArchiveEntryName(name) {
-  let decoded;
-  try {
-    decoded = decodeURIComponent(name);
-  } catch (error) {
-    throw new Error(`Invalid URI-encoded archive entry name: ${name}`, { cause: error });
-  }
-  if ([".", ".."].includes(decoded) || /[\\/\0]/.test(decoded)) {
-    throw new Error(`Unsafe decoded archive entry name: ${name} -> ${decoded}`);
-  }
-  return decoded;
-}
-
-function decodeUriEncodedTree(rootDir) {
-  let renamed = 0;
-  function visit(directory) {
-    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-      const source = path.join(directory, entry.name);
-      if (entry.isDirectory()) visit(source);
-      const decodedName = decodeArchiveEntryName(entry.name);
-      if (decodedName === entry.name) continue;
-      const destination = path.join(directory, decodedName);
-      if (fs.existsSync(destination)) {
-        throw new Error(`Decoded archive entry collides with existing path: ${destination}`);
-      }
-      fs.renameSync(source, destination);
-      renamed += 1;
-    }
-  }
-  visit(rootDir);
-  return renamed;
-}
-
-function findFile(dir, name) {
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    const fullPath = path.join(dir, entry.name);
-    if (entry.isFile() && entry.name === name) return fullPath;
-    if (!entry.isDirectory()) continue;
-    const found = findFile(fullPath, name);
-    if (found) return found;
   }
   return null;
 }
@@ -241,8 +187,6 @@ function inspectMacApp(appPath, expected = {}, platform = process.platform) {
 
 module.exports = {
   clearDir,
-  decodeUriEncodedTree,
-  findFile,
   findMacApp,
   getZipExtractor,
   inspectMacApp,

@@ -9,14 +9,14 @@
  * and replace with !1 (false).
  *
  * Usage:
- *   node scripts/patch-sunset.js [platform]   # Apply patch (unix/win/omit=both)
+ *   node scripts/patch-sunset.js [platform]   # Apply to one or both macOS architectures
  *   node scripts/patch-sunset.js --check      # Dry-run: report matches
  *   node scripts/patch-sunset.js --verify     # Require applied state
  */
 const fs = require("fs");
 const path = require("path");
 const { parse } = require("acorn");
-const { relPath, SRC_DIR } = require("./patch-util");
+const { parsePatchArgs, relPath, SRC_DIR } = require("./patch-util");
 
 // ──────────────────────────────────────────────
 //  AST walker
@@ -118,7 +118,7 @@ function collectPatches(ast, source) {
 function locateTargets(platform) {
   const platforms = platform
     ? [platform]
-    : ["mac-arm64", "mac-x64", "win"].filter((name) =>
+    : ["mac-arm64", "mac-x64"].filter((name) =>
         fs.existsSync(path.join(SRC_DIR, name, "_asar", "webview", "assets")),
       );
   const targets = [];
@@ -142,10 +142,7 @@ function locateTargets(platform) {
 // ──────────────────────────────────────────────
 
 function main() {
-  const args = process.argv.slice(2);
-  const isCheck = args.includes("--check");
-  const isVerify = args.includes("--verify");
-  const platform = args.find((a) => ["mac-arm64", "mac-x64", "win"].includes(a));
+  const { isCheck, isVerify, platform } = parsePatchArgs(process.argv.slice(2));
 
   const bundles = locateTargets(platform);
 

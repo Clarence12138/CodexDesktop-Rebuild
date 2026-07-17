@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * patch-updater.js — Disable Sparkle (macOS) and Windows auto-updater
+ * patch-updater.js — Disable every updater bundled in the macOS application
  *
  * AST match: in the file containing shouldIncludeSparkle / shouldIncludeUpdater,
  * find these method definitions and replace their bodies to return false.
@@ -13,7 +13,7 @@
 const fs = require("fs");
 const path = require("path");
 const { parse } = require("acorn");
-const { locateBundles, relPath, SRC_DIR } = require("./patch-util");
+const { locateBundles, parsePatchArgs, relPath, SRC_DIR } = require("./patch-util");
 
 const UPDATER_METHODS = new Set([
   "shouldIncludeSparkle",
@@ -75,7 +75,7 @@ function collectPatches(ast, source) {
 function locateTargets(platform) {
   const platforms = platform
     ? [platform]
-    : ["mac-arm64", "mac-x64", "win"].filter((p) =>
+    : ["mac-arm64", "mac-x64"].filter((p) =>
         fs.existsSync(path.join(SRC_DIR, p, "_asar", ".vite", "build")),
       );
 
@@ -99,10 +99,7 @@ function locateTargets(platform) {
 }
 
 function main() {
-  const args = process.argv.slice(2);
-  const isCheck = args.includes("--check");
-  const isVerify = args.includes("--verify");
-  const platform = args.find((a) => ["mac-arm64", "mac-x64", "win"].includes(a));
+  const { isCheck, isVerify, platform } = parsePatchArgs(process.argv.slice(2));
 
   const targets = locateTargets(platform);
   if (targets.length === 0) {

@@ -4,7 +4,6 @@ const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 const {
-  decodeUriEncodedTree,
   findMacApp,
   getZipExtractor,
   parseArchitectures,
@@ -13,24 +12,22 @@ const {
   removeCacheEntries,
   validateMacMetadata,
 } = require("./sync-upstream-lib");
-const { selectPackageForArchitecture } = require("./fetch-msstore");
 
-test("parseArgs accepts a local macOS app and rejects conflicting flags", () => {
+test("parseArgs accepts macOS sync options and rejects retired platform flags", () => {
   const localMacApp = "/Applications/Codex.app";
-  const options = parseArgs(["--force", "--skip-win", "--local-mac-app", localMacApp]);
+  const options = parseArgs(["--force", "--local-mac-app", localMacApp]);
   assert.equal(options.force, true);
-  assert.equal(options.skipWin, true);
   assert.equal(options.localMacApp, path.resolve(localMacApp));
   assert.equal(options.macPlatform, null);
-  assert.throws(() => parseArgs(["--skip-mac", "--local-mac-app", "/tmp/App.app"]), /cannot be combined/);
   assert.throws(() => parseArgs(["--local-mac-app"]), /requires a path/);
+  assert.throws(() => parseArgs(["--skip-win"]), /Unknown argument/);
+  assert.throws(() => parseArgs(["--skip-mac"]), /Unknown argument/);
 });
 
 test("parseArgs restricts sync to one macOS platform", () => {
-  const options = parseArgs(["--skip-win", "--mac-platform", "mac-x64"]);
+  const options = parseArgs(["--mac-platform", "mac-x64"]);
   assert.equal(options.macPlatform, "mac-x64");
   assert.throws(() => parseArgs(["--mac-platform", "linux-x64"]), /must be/);
-  assert.throws(() => parseArgs(["--skip-mac", "--mac-platform", "mac-x64"]), /cannot be combined/);
 });
 
 test("ZIP extraction uses platform-native tools", () => {
@@ -42,29 +39,6 @@ test("ZIP extraction uses platform-native tools", () => {
     binary: "unzip",
     args: ["-q", "Codex.zip", "-d", "/tmp/out"],
   });
-  assert.equal(getZipExtractor("Codex.msix", "/tmp/out", "win32"), null);
-});
-
-test("MSIX path decoding is recursive and rejects unsafe names", (t) => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "msix-paths-"));
-  t.after(() => fs.rmSync(root, { force: true, recursive: true }));
-  const encodedDir = path.join(root, "%40scope");
-  fs.mkdirSync(encodedDir);
-  fs.writeFileSync(path.join(encodedDir, "%24binding.node"), "native");
-
-  assert.equal(decodeUriEncodedTree(root), 2);
-  assert.equal(fs.readFileSync(path.join(root, "@scope", "$binding.node"), "utf8"), "native");
-
-  fs.writeFileSync(path.join(root, "%2Fescape"), "unsafe");
-  assert.throws(() => decodeUriEncodedTree(root), /Unsafe decoded archive entry name/);
-  fs.rmSync(path.join(root, "%2Fescape"));
-
-  fs.writeFileSync(path.join(root, "%40collision"), "encoded");
-  fs.writeFileSync(path.join(root, "@collision"), "decoded");
-  assert.throws(() => decodeUriEncodedTree(root), /collides with existing path/);
-  fs.rmSync(path.join(root, "%40collision"));
-  fs.writeFileSync(path.join(root, "%invalid"), "malformed");
-  assert.throws(() => decodeUriEncodedTree(root), /Invalid URI-encoded archive entry name/);
 });
 
 test("findMacApp locates an arbitrarily named app containing app.asar", () => {
@@ -115,21 +89,4 @@ test("--force cache removal deletes archives and extraction directories", () => 
   assert.equal(fs.existsSync(archive), false);
   assert.equal(fs.existsSync(extract), false);
   fs.rmSync(root, { recursive: true, force: true });
-});
-
-test("Microsoft Store package selection requires the requested architecture", () => {
-  const packages = [
-    { name: "OpenAI.Codex_26.715.2305.0_arm64__publisher.msix" },
-    { name: "OpenAI.Codex_26.715.2305.0_x64__publisher.msix" },
-  ];
-
-  assert.equal(selectPackageForArchitecture(packages, "x64"), packages[1]);
-  assert.throws(
-    () => selectPackageForArchitecture(packages, "x86"),
-    /Unsupported Microsoft Store architecture/,
-  );
-  assert.throws(
-    () => selectPackageForArchitecture(packages.slice(0, 1), "x64"),
-    /Expected exactly one x64 Microsoft Store package/,
-  );
 });

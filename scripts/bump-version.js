@@ -23,9 +23,6 @@ const SRC_DIR = path.join(__dirname, "..", "src");
 const PLATFORM_PRIORITY = Object.freeze([
   "mac-arm64",
   "mac-x64",
-  "win",
-  "linux-x64",
-  "linux-arm64",
 ]);
 
 function parseArgs(argv) {

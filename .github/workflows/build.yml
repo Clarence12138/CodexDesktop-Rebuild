@@ -1,21 +1,25 @@
-name: Build & Release (Manual)
+name: Build macOS (Manual)
 
 on:
   workflow_dispatch:
-    inputs:
-      platform:
-        description: "Target platform"
-        required: false
-        default: "all"
-        type: choice
-        options: [all, mac, windows, linux]
 
 env:
   NODE_VERSION: "24"
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - run: npm test
+
   build-mac:
-    if: inputs.platform == 'all' || inputs.platform == 'mac'
+    needs: test
     runs-on: macos-latest
     strategy:
       fail-fast: false
@@ -27,82 +31,17 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
-      - run: |
-          npm ci
-      - run: |
-          brew install --quiet sevenzip
-      - run: node scripts/sync-upstream.js --force --skip-win
-      - run: node scripts/patch-all.js mac-${{ matrix.arch }}
-      - run: npm run build:mac-${{ matrix.arch }}
+      - run: npm ci
+      - name: Sync upstream macOS app
+        run: node scripts/sync-upstream.js --force --mac-platform mac-${{ matrix.arch }}
+      - name: Patch
+        run: node scripts/patch-all.js mac-${{ matrix.arch }}
+      - name: Verify patches
+        run: node scripts/patch-all.js mac-${{ matrix.arch }} --verify
+      - name: Build DMG
+        run: npm run build:mac-${{ matrix.arch }}
       - uses: actions/upload-artifact@v7
         with:
           name: Codex-macOS-${{ matrix.arch }}
           path: out/*.dmg
-
-  build-windows:
-    if: inputs.platform == 'all' || inputs.platform == 'windows'
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-      - run: |
-          npm ci
-      - run: npm test
-      - run: |
-          choco install 7zip -y
-      - name: Add 7zz alias
-        run: |
-          Copy-Item "C:\Program Files\7-Zip\7z.exe" "C:\Program Files\7-Zip\7zz.exe"
-          echo "C:\Program Files\7-Zip" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
-      - run: node scripts/sync-upstream.js --force --skip-mac
-      - run: node scripts/patch-all.js win
-      - run: node scripts/patch-all.js win --verify
-      - run: npm run build:win-x64
-      - name: Smoke test packaged app
-        shell: pwsh
-        run: |
-          $process = Start-Process "out/win/Codex-win32-x64/Codex.exe" -ArgumentList "--disable-gpu" -PassThru
-          Start-Sleep -Seconds 15
-          if ($process.HasExited) {
-            throw "Packaged Codex.exe exited during smoke test with code $($process.ExitCode)"
-          }
-          Stop-Process -Id $process.Id -Force
-      - uses: actions/upload-artifact@v7
-        with:
-          name: Codex-Windows-x64
-          path: out/*.zip
           if-no-files-found: error
-
-  build-linux:
-    if: inputs.platform == 'all' || inputs.platform == 'linux'
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        arch: [x64, arm64]
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-      - run: |
-          npm ci
-      - run: |
-          sudo apt-get update
-          sudo apt-get install -y rpm fakeroot dpkg 7zip unzip python3
-      - run: node scripts/sync-upstream.js --force --skip-win
-      - run: node scripts/patch-all.js mac-${{ matrix.arch }}
-      - name: Configure RPM packaging
-        run: printf '%s\n' '%__strip /bin/true' > "$HOME/.rpmmacros"
-      - run: npm run build:linux-${{ matrix.arch }}
-      - uses: actions/upload-artifact@v7
-        with:
-          name: Codex-Linux-${{ matrix.arch }}
-          path: |
-            out/make/deb/**/*.deb
-            out/make/rpm/**/*.rpm
-            out/make/zip/**/*.zip

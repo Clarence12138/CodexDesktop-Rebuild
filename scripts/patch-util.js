@@ -7,6 +7,30 @@ const path = require("path");
 
 const SRC_DIR = path.join(__dirname, "..", "src");
 const PROJECT_ROOT = path.join(__dirname, "..");
+const PATCH_PLATFORMS = Object.freeze(["mac-arm64", "mac-x64"]);
+
+function parsePatchArgs(argv, { allowedFlags = ["--check", "--verify"] } = {}) {
+  let platform = null;
+  const flags = new Set();
+  for (const arg of argv) {
+    if (PATCH_PLATFORMS.includes(arg)) {
+      if (platform) throw new Error(`Multiple patch platforms: ${platform}, ${arg}`);
+      platform = arg;
+    } else if (allowedFlags.includes(arg)) {
+      flags.add(arg);
+    } else {
+      throw new Error(`Unknown argument: ${arg}`);
+    }
+  }
+  if (flags.has("--check") && flags.has("--verify")) {
+    throw new Error("--check and --verify are mutually exclusive");
+  }
+  return Object.freeze({
+    isCheck: flags.has("--check"),
+    isVerify: flags.has("--verify"),
+    platform,
+  });
+}
 
 /**
  * Locate bundles matching a filename pattern across platform directories.
@@ -34,10 +58,9 @@ function locateBundles({ dir, pattern, platform }) {
   const getDir = dirMap[dir];
   if (!getDir) throw new Error(`Unknown dir type: ${dir}`);
 
-  const ALL_PLATFORMS = ["mac-arm64", "mac-x64", "win"];
   const platforms = platform
     ? [platform]
-    : ALL_PLATFORMS.filter((p) => fs.existsSync(getDir(p)));
+    : PATCH_PLATFORMS.filter((p) => fs.existsSync(getDir(p)));
 
   // Legacy fallback
   if (platforms.length === 0) {
@@ -82,4 +105,10 @@ function relPath(absPath) {
   return path.relative(PROJECT_ROOT, absPath);
 }
 
-module.exports = { locateBundles, relPath, SRC_DIR, PROJECT_ROOT };
+module.exports = {
+  locateBundles,
+  parsePatchArgs,
+  relPath,
+  SRC_DIR,
+  PROJECT_ROOT,
+};

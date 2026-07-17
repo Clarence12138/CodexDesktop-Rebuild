@@ -2,6 +2,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { execFileSync } = require("child_process");
+const asar = require("@electron/asar");
 
 const {
   clearDir,
@@ -13,6 +14,14 @@ const {
 
 const INTEGRITY_HASH_KEY = "ElectronAsarIntegrity.Resources/app\\.asar.hash";
 const INTEGRITY_ALGORITHM_KEY = "ElectronAsarIntegrity.Resources/app\\.asar.algorithm";
+const DEVICE_KIT_MODULES = "node_modules/@worklouder/device-kit-oai/node_modules/@worklouder/wl-device-kit/node_modules";
+const MAC_NATIVE_UNPACK_DIRECTORIES = Object.freeze([
+  `${DEVICE_KIT_MODULES}/node-hid`,
+  `${DEVICE_KIT_MODULES}/serialport`,
+  "node_modules/better-sqlite3",
+  "node_modules/node-pty",
+  "node_modules/objc-js",
+]);
 
 function exec(command, args, options = {}) {
   return execFileSync(command, args, { stdio: "pipe", ...options });
@@ -51,6 +60,38 @@ function verifyBinaryArchitecture(binaryPath, platform) {
   if (!output.includes(architecture)) {
     throw new Error(`${binaryPath} is not ${architecture}: ${output.trim()}`);
   }
+}
+
+function listFiles(directory) {
+  const files = [];
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    const entryPath = path.join(directory, entry.name);
+    if (entry.isDirectory()) files.push(...listFiles(entryPath));
+    else if (entry.isFile()) files.push(entryPath);
+  }
+  return files;
+}
+
+function verifyUnpackedNativeModules({ asarPath, sourceDir }) {
+  const nativeFiles = listFiles(sourceDir).filter((file) => file.endsWith(".node"));
+  if (nativeFiles.length === 0) throw new Error("ASAR source contains no native modules");
+  for (const file of nativeFiles) {
+    const relativePath = path.relative(sourceDir, file).split(path.sep).join("/");
+    const stat = asar.statFile(asarPath, relativePath);
+    if (!stat.unpacked) throw new Error(`Native module is packed inside ASAR: ${relativePath}`);
+    const physicalPath = path.join(`${asarPath}.unpacked`, relativePath);
+    if (!fs.existsSync(physicalPath)) {
+      throw new Error(`Unpacked native module is missing: ${physicalPath}`);
+    }
+  }
+  const spawnHelper = "node_modules/node-pty/build/Release/spawn-helper";
+  if (!asar.statFile(asarPath, spawnHelper).unpacked) {
+    throw new Error(`node-pty helper is packed inside ASAR: ${spawnHelper}`);
+  }
+  if (!fs.existsSync(path.join(`${asarPath}.unpacked`, spawnHelper))) {
+    throw new Error(`Unpacked node-pty helper is missing: ${spawnHelper}`);
+  }
+  console.log(`   [verify] ${nativeFiles.length} native modules and node-pty helper are unpacked`);
 }
 
 function verifyApp({ appPath, asarPath, platform }) {
@@ -99,7 +140,13 @@ function buildMac({ outDir, platform, projectRoot, srcDir }) {
 
   const resourcesDir = path.join(outputApp, "Contents", "Resources");
   const asarPath = path.join(resourcesDir, "app.asar");
-  packAsar({ source: asarDir, destination: asarPath, cwd: projectRoot });
+  packAsar({
+    source: asarDir,
+    destination: asarPath,
+    cwd: projectRoot,
+    unpackDirectories: MAC_NATIVE_UNPACK_DIRECTORIES,
+  });
+  verifyUnpackedNativeModules({ asarPath, sourceDir: asarDir });
   const infoPlist = path.join(outputApp, "Contents", "Info.plist");
   updateBundleMetadata(infoPlist, asarPath);
 
@@ -128,6 +175,7 @@ module.exports = {
   buildMac,
   expectedArchitecture,
   locateSourceApp,
+  verifyUnpackedNativeModules,
   updateBundleMetadata,
   verifyApp,
 };
