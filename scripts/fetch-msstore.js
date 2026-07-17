@@ -222,6 +222,22 @@ function parseXml(xml) {
   return xmlParser.parse(xml);
 }
 
+const SUPPORTED_ARCHITECTURES = new Set(["x64", "arm64"]);
+
+function selectPackageForArchitecture(packages, architecture) {
+  if (!SUPPORTED_ARCHITECTURES.has(architecture)) {
+    throw new Error(`Unsupported Microsoft Store architecture: ${architecture}`);
+  }
+  const marker = `_${architecture}__`;
+  const matches = packages.filter((pkg) => pkg.name?.toLowerCase().includes(marker));
+  if (matches.length !== 1) {
+    throw new Error(
+      `Expected exactly one ${architecture} Microsoft Store package, found ${matches.length}`,
+    );
+  }
+  return matches[0];
+}
+
 // ─── 日志（仅 CLI 直接运行时输出）─────────────────────────────────
 const isCLI = require.main === module;
 const log = (...args) => isCLI && console.log(...args);
@@ -614,7 +630,13 @@ async function main() {
 }
 
 // 支持作为模块导入
-module.exports = { getCookie, getAppInfo, getFileList, getDownloadUrl };
+module.exports = {
+  getCookie,
+  getAppInfo,
+  getFileList,
+  getDownloadUrl,
+  selectPackageForArchitecture,
+};
 
 // CLI 直接运行
 if (require.main === module) {

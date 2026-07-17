@@ -124,7 +124,7 @@ async function getWindowsVersion() {
   if (!appInfo.categoryId) throw new Error("Windows Store response has no CategoryID");
   const packages = await msstore.getFileList(cookie, appInfo.categoryId, "Retail");
   if (packages.length === 0) throw new Error("Windows Store returned no packages");
-  const pkg = packages[0];
+  const pkg = msstore.selectPackageForArchitecture(packages, "x64");
   const version = pkg.name.match(/_(\d+\.\d+\.\d+(?:\.\d+)?)_/)?.[1];
   if (!version) throw new Error(`Cannot determine Windows version from ${pkg.name}`);
   const url = await msstore.getDownloadUrl(pkg.updateID, pkg.revisionNumber, "Retail", pkg.digest);

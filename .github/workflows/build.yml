@@ -50,6 +50,7 @@ jobs:
           cache: npm
       - run: |
           npm ci
+      - run: npm test
       - run: |
           choco install 7zip -y
       - name: Add 7zz alias
@@ -58,11 +59,22 @@ jobs:
           echo "C:\Program Files\7-Zip" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
       - run: node scripts/sync-upstream.js --force --skip-mac
       - run: node scripts/patch-all.js win
+      - run: node scripts/patch-all.js win --verify
       - run: npm run build:win-x64
+      - name: Smoke test packaged app
+        shell: pwsh
+        run: |
+          $process = Start-Process "out/win/Codex-win32-x64/Codex.exe" -ArgumentList "--disable-gpu" -PassThru
+          Start-Sleep -Seconds 15
+          if ($process.HasExited) {
+            throw "Packaged Codex.exe exited during smoke test with code $($process.ExitCode)"
+          }
+          Stop-Process -Id $process.Id -Force
       - uses: actions/upload-artifact@v7
         with:
           name: Codex-Windows-x64
           path: out/*.zip
+          if-no-files-found: error
 
   build-linux:
     if: inputs.platform == 'all' || inputs.platform == 'linux'
