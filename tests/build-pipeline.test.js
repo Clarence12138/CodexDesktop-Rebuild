@@ -40,6 +40,10 @@ const releaseWorkflowSource = fs.readFileSync(
   path.join(__dirname, "../.github/workflows/sync.yml"),
   "utf8",
 );
+const windowsSmokeSource = fs.readFileSync(
+  path.join(__dirname, "../scripts/smoke-windows.ps1"),
+  "utf8",
+);
 
 test("findAppBundle accepts ChatGPT.app and ignores unrelated app directories", (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-app-locator-"));
@@ -110,6 +114,14 @@ test("native ASAR packing invokes the locked CLI through Node", (t) => {
 test("Linux workflows preserve bundled cross-architecture binaries in RPMs", () => {
   assert.match(manualWorkflowSource, /%__strip \/bin\/true/);
   assert.match(releaseWorkflowSource, /%__strip \/bin\/true/);
+});
+
+test("Windows workflows compare upstream and packaged smoke results with logs", () => {
+  assert.match(manualWorkflowSource, /scripts\/smoke-windows\.ps1/);
+  assert.match(releaseWorkflowSource, /scripts\/smoke-windows\.ps1/);
+  assert.match(windowsSmokeSource, /ELECTRON_ENABLE_LOGGING/);
+  assert.match(windowsSmokeSource, /Both upstream and packaged apps exited/);
+  assert.match(windowsSmokeSource, /Packaged app exited while the upstream baseline stayed alive/);
 });
 
 test("rebuild requires strict applied-patch verification before packaging", () => {

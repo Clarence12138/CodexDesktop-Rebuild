@@ -61,15 +61,12 @@ jobs:
       - run: node scripts/patch-all.js win
       - run: node scripts/patch-all.js win --verify
       - run: npm run build:win-x64
-      - name: Smoke test packaged app
+      - name: Smoke test upstream and packaged apps
         shell: pwsh
         run: |
-          $process = Start-Process "out/win/Codex-win32-x64/Codex.exe" -ArgumentList "--disable-gpu" -PassThru
-          Start-Sleep -Seconds 15
-          if ($process.HasExited) {
-            throw "Packaged Codex.exe exited during smoke test with code $($process.ExitCode)"
-          }
-          Stop-Process -Id $process.Id -Force
+          ./scripts/smoke-windows.ps1 `
+            -UpstreamExecutable "$env:TEMP/codex-sync/win-extract/app/Codex.exe" `
+            -PackagedExecutable "out/win/Codex-win32-x64/Codex.exe"
       - uses: actions/upload-artifact@v7
         with:
           name: Codex-Windows-x64
